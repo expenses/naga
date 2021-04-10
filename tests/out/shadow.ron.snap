@@ -106,16 +106,16 @@ expression: output
         (
             name: Some("Globals"),
             inner: Struct(
-                block: true,
+                level: Root,
                 members: [
                     (
                         name: Some("num_lights"),
                         ty: 13,
                         binding: None,
-                        size: None,
-                        align: None,
+                        offset: 0,
                     ),
                 ],
+                span: 16,
             ),
         ),
         (
@@ -150,30 +150,30 @@ expression: output
         (
             name: Some("Light"),
             inner: Struct(
-                block: false,
+                level: Normal(
+                    alignment: 16,
+                ),
                 members: [
                     (
                         name: Some("proj"),
                         ty: 18,
                         binding: None,
-                        size: None,
-                        align: None,
+                        offset: 0,
                     ),
                     (
                         name: Some("pos"),
                         ty: 4,
                         binding: None,
-                        size: None,
-                        align: None,
+                        offset: 64,
                     ),
                     (
                         name: Some("color"),
                         ty: 4,
                         binding: None,
-                        size: None,
-                        align: None,
+                        offset: 80,
                     ),
                 ],
+                span: 96,
             ),
         ),
         (
@@ -181,22 +181,22 @@ expression: output
             inner: Array(
                 base: 19,
                 size: Dynamic,
-                stride: Some(96),
+                stride: 96,
             ),
         ),
         (
             name: Some("Lights"),
             inner: Struct(
-                block: true,
+                level: Root,
                 members: [
                     (
                         name: Some("data"),
                         ty: 20,
                         binding: None,
-                        size: None,
-                        align: None,
+                        offset: 0,
                     ),
                 ],
+                span: 96,
             ),
         ),
         (

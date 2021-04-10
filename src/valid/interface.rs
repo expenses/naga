@@ -239,8 +239,9 @@ impl VaryingContext<'_> {
                 match self.types[self.ty].inner {
                     //TODO: check the member types
                     crate::TypeInner::Struct {
-                        block: false,
+                        level: crate::StructLevel::Normal { .. },
                         ref members,
+                        ..
                     } => {
                         for (index, member) in members.iter().enumerate() {
                             self.ty = member.ty;
@@ -272,12 +273,9 @@ impl super::Validator {
         let (allowed_storage_access, required_type_flags, is_resource) = match var.class {
             crate::StorageClass::Function => return Err(GlobalVariableError::InvalidUsage),
             crate::StorageClass::Storage => {
-                if let Err((ty_handle, ref disalignment)) = type_info.storage_layout {
+                if let Err((ty_handle, disalignment)) = type_info.storage_layout {
                     if self.flags.contains(ValidationFlags::STRUCT_LAYOUTS) {
-                        return Err(GlobalVariableError::Alignment(
-                            ty_handle,
-                            disalignment.clone(),
-                        ));
+                        return Err(GlobalVariableError::Alignment(ty_handle, disalignment));
                     }
                 }
                 (
@@ -287,12 +285,9 @@ impl super::Validator {
                 )
             }
             crate::StorageClass::Uniform => {
-                if let Err((ty_handle, ref disalignment)) = type_info.uniform_layout {
+                if let Err((ty_handle, disalignment)) = type_info.uniform_layout {
                     if self.flags.contains(ValidationFlags::STRUCT_LAYOUTS) {
-                        return Err(GlobalVariableError::Alignment(
-                            ty_handle,
-                            disalignment.clone(),
-                        ));
+                        return Err(GlobalVariableError::Alignment(ty_handle, disalignment));
                     }
                 }
                 (

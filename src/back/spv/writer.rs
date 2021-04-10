@@ -3,7 +3,7 @@ use super::{
 };
 use crate::{
     arena::{Arena, Handle},
-    proc::{Layouter, TypeResolution},
+    proc::TypeResolution,
     valid::{FunctionInfo, ModuleInfo},
 };
 use spirv::Word;
@@ -455,10 +455,8 @@ impl Writer {
                         .body
                         .push(Instruction::load(argument_type_id, id, varying_id, None));
                     id
-                } else if let crate::TypeInner::Struct {
-                    block: _,
-                    ref members,
-                } = ir_module.types[argument.ty].inner
+                } else if let crate::TypeInner::Struct { ref members, .. } =
+                    ir_module.types[argument.ty].inner
                 {
                     let struct_id = self.id_gen.next();
                     let mut constituent_ids = Vec::with_capacity(members.len());
@@ -509,10 +507,8 @@ impl Writer {
                             type_id,
                             built_in: binding.to_built_in(),
                         });
-                    } else if let crate::TypeInner::Struct {
-                        block: _,
-                        ref members,
-                    } = ir_module.types[result.ty].inner
+                    } else if let crate::TypeInner::Struct { ref members, .. } =
+                        ir_module.types[result.ty].inner
                     {
                         for member in members {
                             let type_id =
@@ -760,10 +756,10 @@ impl Writer {
     fn write_type_declaration_arena(
         &mut self,
         arena: &Arena<crate::Type>,
-        layouter: &Layouter,
         handle: Handle<crate::Type>,
     ) -> Result<Word, Error> {
         let ty = &arena[handle];
+        let decorate_layout = true; //TODO?
 
         let id = if let Some(local) = self.physical_layout.make_local(&ty.inner) {
             match self.lookup_type.entry(LookupType::Local(local)) {
@@ -789,6 +785,8 @@ impl Writer {
                 self.debugs.push(Instruction::name(id, name));
             }
         }
+
+        use spirv::Decoration;
 
         let instruction = match ty.inner {
             crate::TypeInner::Scalar { kind, width } => self.write_scalar(id, kind, width),
@@ -843,11 +841,11 @@ impl Writer {
             }
             crate::TypeInner::Sampler { comparison: _ } => Instruction::type_sampler(id),
             crate::TypeInner::Array { base, size, stride } => {
-                if let Some(array_stride) = stride {
+                if decorate_layout {
                     self.annotations.push(Instruction::decorate(
                         id,
-                        spirv::Decoration::ArrayStride,
-                        &[array_stride.get()],
+                        Decoration::ArrayStride,
+                        &[stride],
                     ));
                 }
 
@@ -860,23 +858,26 @@ impl Writer {
                     crate::ArraySize::Dynamic => Instruction::type_runtime_array(id, type_id),
                 }
             }
-            crate::TypeInner::Struct { block, ref members } => {
-                if block {
+            crate::TypeInner::Struct {
+                ref level,
+                ref members,
+                span: _,
+            } => {
+                if let crate::StructLevel::Root = *level {
                     self.annotations
-                        .push(Instruction::decorate(id, spirv::Decoration::Block, &[]));
+                        .push(Instruction::decorate(id, Decoration::Block, &[]));
                 }
 
-                let mut current_offset = 0;
                 let mut member_ids = Vec::with_capacity(members.len());
                 for (index, member) in members.iter().enumerate() {
-                    let (placement, _) = layouter.member_placement(current_offset, member);
-                    self.annotations.push(Instruction::member_decorate(
-                        id,
-                        index as u32,
-                        spirv::Decoration::Offset,
-                        &[placement.start],
-                    ));
-                    current_offset = placement.end;
+                    if decorate_layout {
+                        self.annotations.push(Instruction::member_decorate(
+                            id,
+                            index as u32,
+                            Decoration::Offset,
+                            &[member.offset],
+                        ));
+                    }
 
                     if self.flags.contains(WriterFlags::DEBUG) {
                         if let Some(ref name) = member.name {
@@ -898,13 +899,13 @@ impl Writer {
                         self.annotations.push(Instruction::member_decorate(
                             id,
                             index as u32,
-                            spirv::Decoration::ColMajor,
+                            Decoration::ColMajor,
                             &[],
                         ));
                         self.annotations.push(Instruction::member_decorate(
                             id,
                             index as u32,
-                            spirv::Decoration::MatrixStride,
+                            Decoration::MatrixStride,
                             &[byte_stride as u32],
                         ));
                     }
@@ -1067,18 +1068,17 @@ impl Writer {
             }
         }
 
+        use spirv::{BuiltIn, Decoration};
+
         match *binding {
             crate::Binding::Location(location, interpolation) => {
-                self.annotations.push(Instruction::decorate(
-                    id,
-                    spirv::Decoration::Location,
-                    &[location],
-                ));
+                self.annotations
+                    .push(Instruction::decorate(id, Decoration::Location, &[location]));
                 let interp_decoration = match interpolation {
-                    Some(crate::Interpolation::Linear) => Some(spirv::Decoration::NoPerspective),
-                    Some(crate::Interpolation::Flat) => Some(spirv::Decoration::Flat),
-                    Some(crate::Interpolation::Centroid) => Some(spirv::Decoration::Centroid),
-                    Some(crate::Interpolation::Sample) => Some(spirv::Decoration::Sample),
+                    Some(crate::Interpolation::Linear) => Some(Decoration::NoPerspective),
+                    Some(crate::Interpolation::Flat) => Some(Decoration::Flat),
+                    Some(crate::Interpolation::Centroid) => Some(Decoration::Centroid),
+                    Some(crate::Interpolation::Sample) => Some(Decoration::Sample),
                     Some(crate::Interpolation::Perspective) | None => None,
                 };
                 if let Some(decoration) = interp_decoration {
@@ -1091,34 +1091,34 @@ impl Writer {
                 let built_in = match built_in {
                     Bi::Position => {
                         if class == spirv::StorageClass::Output {
-                            spirv::BuiltIn::Position
+                            BuiltIn::Position
                         } else {
-                            spirv::BuiltIn::FragCoord
+                            BuiltIn::FragCoord
                         }
                     }
                     // vertex
-                    Bi::BaseInstance => spirv::BuiltIn::BaseInstance,
-                    Bi::BaseVertex => spirv::BuiltIn::BaseVertex,
-                    Bi::ClipDistance => spirv::BuiltIn::ClipDistance,
-                    Bi::InstanceIndex => spirv::BuiltIn::InstanceIndex,
-                    Bi::PointSize => spirv::BuiltIn::PointSize,
-                    Bi::VertexIndex => spirv::BuiltIn::VertexIndex,
+                    Bi::BaseInstance => BuiltIn::BaseInstance,
+                    Bi::BaseVertex => BuiltIn::BaseVertex,
+                    Bi::ClipDistance => BuiltIn::ClipDistance,
+                    Bi::InstanceIndex => BuiltIn::InstanceIndex,
+                    Bi::PointSize => BuiltIn::PointSize,
+                    Bi::VertexIndex => BuiltIn::VertexIndex,
                     // fragment
-                    Bi::FragDepth => spirv::BuiltIn::FragDepth,
-                    Bi::FrontFacing => spirv::BuiltIn::FrontFacing,
-                    Bi::SampleIndex => spirv::BuiltIn::SampleId,
-                    Bi::SampleMask => spirv::BuiltIn::SampleMask,
+                    Bi::FragDepth => BuiltIn::FragDepth,
+                    Bi::FrontFacing => BuiltIn::FrontFacing,
+                    Bi::SampleIndex => BuiltIn::SampleId,
+                    Bi::SampleMask => BuiltIn::SampleMask,
                     // compute
-                    Bi::GlobalInvocationId => spirv::BuiltIn::GlobalInvocationId,
-                    Bi::LocalInvocationId => spirv::BuiltIn::LocalInvocationId,
-                    Bi::LocalInvocationIndex => spirv::BuiltIn::LocalInvocationIndex,
-                    Bi::WorkGroupId => spirv::BuiltIn::WorkgroupId,
-                    Bi::WorkGroupSize => spirv::BuiltIn::WorkgroupSize,
+                    Bi::GlobalInvocationId => BuiltIn::GlobalInvocationId,
+                    Bi::LocalInvocationId => BuiltIn::LocalInvocationId,
+                    Bi::LocalInvocationIndex => BuiltIn::LocalInvocationIndex,
+                    Bi::WorkGroupId => BuiltIn::WorkgroupId,
+                    Bi::WorkGroupSize => BuiltIn::WorkgroupSize,
                 };
 
                 self.annotations.push(Instruction::decorate(
                     id,
-                    spirv::Decoration::BuiltIn,
+                    Decoration::BuiltIn,
                     &[built_in as u32],
                 ));
             }
@@ -1149,9 +1149,11 @@ impl Writer {
             }
         }
 
+        use spirv::Decoration;
+
         let access_decoration = match global_variable.storage_access {
-            crate::StorageAccess::LOAD => Some(spirv::Decoration::NonWritable),
-            crate::StorageAccess::STORE => Some(spirv::Decoration::NonReadable),
+            crate::StorageAccess::LOAD => Some(Decoration::NonWritable),
+            crate::StorageAccess::STORE => Some(Decoration::NonReadable),
             _ => None,
         };
         if let Some(decoration) = access_decoration {
@@ -1162,12 +1164,12 @@ impl Writer {
         if let Some(ref res_binding) = global_variable.binding {
             self.annotations.push(Instruction::decorate(
                 id,
-                spirv::Decoration::DescriptorSet,
+                Decoration::DescriptorSet,
                 &[res_binding.group],
             ));
             self.annotations.push(Instruction::decorate(
                 id,
-                spirv::Decoration::Binding,
+                Decoration::Binding,
                 &[res_binding.binding],
             ));
         }
@@ -2534,7 +2536,7 @@ impl Writer {
 
         // then all types, some of them may rely on constants and struct type set
         for (handle, _) in ir_module.types.iter() {
-            self.write_type_declaration_arena(&ir_module.types, &mod_info.layouter, handle)?;
+            self.write_type_declaration_arena(&ir_module.types, handle)?;
         }
 
         // the all the composite constants, they rely on types

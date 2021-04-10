@@ -23,19 +23,36 @@ For the result type, if it's a structure, we re-compose it with a temporary valu
 holding the result.
 !*/
 
-use crate::{arena::Handle, valid::ModuleInfo, FastHashMap};
+use crate::{
+    arena::{Arena, Handle},
+    valid::ModuleInfo,
+    FastHashMap,
+};
 use std::fmt::{Error as FmtError, Write};
 
 mod keywords;
+pub mod sampler;
 mod writer;
 
 pub use writer::Writer;
 
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "deserialize", derive(serde::Deserialize))]
+pub enum BindSamplerTarget {
+    Resource(u8),
+    Inline(Handle<sampler::InlineSampler>),
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "deserialize", derive(serde::Deserialize))]
 pub struct BindTarget {
+    #[cfg_attr(feature = "deserialize", serde(default))]
     pub buffer: Option<u8>,
+    #[cfg_attr(feature = "deserialize", serde(default))]
     pub texture: Option<u8>,
-    pub sampler: Option<u8>,
+    #[cfg_attr(feature = "deserialize", serde(default))]
+    pub sampler: Option<BindSamplerTarget>,
+    #[cfg_attr(feature = "deserialize", serde(default))]
     pub mutable: bool,
 }
 
@@ -94,19 +111,19 @@ enum LocationMode {
     Uniform,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
+#[cfg_attr(feature = "deserialize", derive(serde::Deserialize))]
 pub struct Options {
     /// (Major, Minor) target version of the Metal Shading Language.
     pub lang_version: (u8, u8),
     /// Binding model mapping to Metal.
     pub binding_map: BindingMap,
+    /// Samplers to be inlined into the code.
+    pub inline_samplers: Arena<sampler::InlineSampler>,
     /// Make it possible to link different stages via SPIRV-Cross.
     pub spirv_cross_compatibility: bool,
     /// Don't panic on missing bindings, instead generate invalid MSL.
     pub fake_missing_bindings: bool,
-    /// Allow `BuiltIn::PointSize` in the vertex shader.
-    /// Metal doesn't like this for non-point primitive topologies.
-    pub allow_point_size: bool,
 }
 
 impl Default for Options {
@@ -114,8 +131,25 @@ impl Default for Options {
         Options {
             lang_version: (1, 0),
             binding_map: BindingMap::default(),
+            inline_samplers: Arena::new(),
             spirv_cross_compatibility: false,
             fake_missing_bindings: true,
+        }
+    }
+}
+
+// A subset of options that are meant to be changed per pipeline.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "deserialize", derive(serde::Deserialize))]
+pub struct PipelineOptions {
+    /// Allow `BuiltIn::PointSize` in the vertex shader.
+    /// Metal doesn't like this for non-point primitive topologies.
+    pub allow_point_size: bool,
+}
+
+impl Default for PipelineOptions {
+    fn default() -> Self {
+        PipelineOptions {
             allow_point_size: true,
         }
     }
@@ -173,9 +207,19 @@ impl Options {
 }
 
 impl ResolvedBinding {
+    fn as_inline_sampler<'a>(&self, options: &'a Options) -> Option<&'a sampler::InlineSampler> {
+        match *self {
+            Self::Resource(BindTarget {
+                sampler: Some(BindSamplerTarget::Inline(handle)),
+                ..
+            }) => Some(&options.inline_samplers[handle]),
+            _ => None,
+        }
+    }
+
     fn try_fmt<W: Write>(&self, out: &mut W) -> Result<(), Error> {
         match *self {
-            ResolvedBinding::BuiltIn(built_in) => {
+            Self::BuiltIn(built_in) => {
                 use crate::BuiltIn as Bi;
                 let name = match built_in {
                     Bi::Position => "position",
@@ -200,17 +244,15 @@ impl ResolvedBinding {
                 };
                 Ok(write!(out, "{}", name)?)
             }
-            ResolvedBinding::Attribute(index) => Ok(write!(out, "attribute({})", index)?),
-            ResolvedBinding::Color(index) => Ok(write!(out, "color({})", index)?),
-            ResolvedBinding::User { prefix, index } => {
-                Ok(write!(out, "user({}{})", prefix, index)?)
-            }
-            ResolvedBinding::Resource(ref target) => {
+            Self::Attribute(index) => Ok(write!(out, "attribute({})", index)?),
+            Self::Color(index) => Ok(write!(out, "color({})", index)?),
+            Self::User { prefix, index } => Ok(write!(out, "user({}{})", prefix, index)?),
+            Self::Resource(ref target) => {
                 if let Some(id) = target.buffer {
                     Ok(write!(out, "buffer({})", id)?)
                 } else if let Some(id) = target.texture {
                     Ok(write!(out, "texture({})", id)?)
-                } else if let Some(id) = target.sampler {
+                } else if let Some(BindSamplerTarget::Resource(id)) = target.sampler {
                     Ok(write!(out, "sampler({})", id)?)
                 } else {
                     Err(Error::UnimplementedBindTarget(target.clone()))
@@ -242,9 +284,10 @@ pub fn write_string(
     module: &crate::Module,
     info: &ModuleInfo,
     options: &Options,
+    pipeline_options: &PipelineOptions,
 ) -> Result<(String, TranslationInfo), Error> {
     let mut w = writer::Writer::new(String::new());
-    let info = w.write(module, info, options)?;
+    let info = w.write(module, info, options, pipeline_options)?;
     Ok((w.finish(), info))
 }
 

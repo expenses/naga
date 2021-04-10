@@ -63,6 +63,9 @@ impl<I: Iterator<Item = u32>> super::Parser<I> {
     }
 
     pub(super) fn parse_function(&mut self, module: &mut crate::Module) -> Result<(), Error> {
+        self.lookup_expression.clear();
+        self.lookup_load_override.clear();
+
         let result_type_id = self.next()?;
         let fun_id = self.next()?;
         let _fun_control = self.next()?;
@@ -248,13 +251,7 @@ impl<I: Iterator<Item = u32>> super::Parser<I> {
                                     // unrecognized binding, skip
                                     continue;
                                 }
-                                members.push(crate::StructMember {
-                                    name: sm.name.clone(),
-                                    ty: sm.ty,
-                                    binding: sm.binding.clone(),
-                                    size: None,
-                                    align: None,
-                                });
+                                members.push(sm.clone());
                                 components.push(function.expressions.append(
                                     crate::Expression::AccessIndex {
                                         base: expr_handle,
@@ -268,8 +265,7 @@ impl<I: Iterator<Item = u32>> super::Parser<I> {
                                 name: None,
                                 ty: result.ty,
                                 binding: result.binding.clone(),
-                                size: None,
-                                align: None,
+                                offset: 0,
                             });
                             // populate just the globals first, then do `Load` in a
                             // separate step, so that we can get a range.
@@ -317,10 +313,9 @@ impl<I: Iterator<Item = u32>> super::Parser<I> {
                 *component = function.expressions.append(load_expr);
             }
 
-            match members.len() {
-                0 => {}
-                1 => {
-                    let member = members.remove(0);
+            match &members[..] {
+                [] => {}
+                [member] => {
                     function.body.push(crate::Statement::Emit(
                         function.expressions.range_from(old_len),
                     ));
@@ -329,15 +324,18 @@ impl<I: Iterator<Item = u32>> super::Parser<I> {
                     });
                     function.result = Some(crate::FunctionResult {
                         ty: member.ty,
-                        binding: member.binding,
+                        binding: member.binding.clone(),
                     });
                 }
                 _ => {
                     let ty = module.types.append(crate::Type {
                         name: None,
                         inner: crate::TypeInner::Struct {
-                            block: false,
+                            level: crate::StructLevel::Normal {
+                                alignment: crate::Alignment::new(1).unwrap(),
+                            },
                             members,
+                            span: 0xFFFF, // shouldn't matter
                         },
                     });
                     let result_expr = function
