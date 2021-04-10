@@ -351,7 +351,6 @@ impl<W: Write> Writer<W> {
                 write!(self.out, "]")?;
             }
             crate::Expression::AccessIndex { base, index } => {
-                self.put_expression(base, context, false)?;
                 let base_res = &context.info[base].ty;
                 let mut resolved = base_res.inner_with(&context.module.types);
                 let base_ty_handle = match *resolved {
@@ -363,20 +362,43 @@ impl<W: Write> Writer<W> {
                 };
                 match *resolved {
                     crate::TypeInner::Struct { .. } => {
+                        self.put_expression(base, context, false)?;
                         let base_ty = base_ty_handle.unwrap();
                         let name = &self.names[&NameKey::StructMember(base_ty, index)];
                         write!(self.out, ".{}", name)?;
                     }
                     crate::TypeInner::ValuePointer { .. } | crate::TypeInner::Vector { .. } => {
+                        let should_bracket = match context.function.expressions[base] {
+                            crate::Expression::Load { pointer } => {
+                                match &context.info[pointer].ty {
+                                    TypeResolution::Handle(handle) => {
+                                        let ty = &context.module.types[*handle];
+                                        matches!(ty.inner, crate::TypeInner::Pointer { .. })
+                                    }
+                                    TypeResolution::Value(_) => false,
+                                }
+                            }
+                            _ => false,
+                        };
+                        if should_bracket {
+                            write!(self.out, "(")?;
+                            self.put_expression(base, context, false)?;
+                            write!(self.out, ")")?;
+                        } else {
+                            self.put_expression(base, context, false)?;
+                        }
                         write!(self.out, ".{}", COMPONENTS[index as usize])?;
                     }
                     crate::TypeInner::Matrix { .. } => {
+                        self.put_expression(base, context, false)?;
                         write!(self.out, "[{}]", index)?;
                     }
                     crate::TypeInner::Array { .. } => {
+                        self.put_expression(base, context, false)?;
                         write!(self.out, "[{}]", index)?;
                     }
                     _ => {
+                        self.put_expression(base, context, false)?;
                         // unexpected indexing, should fail validation
                     }
                 }
