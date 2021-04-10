@@ -265,62 +265,6 @@ impl<'a> Display for ConstantContext<'a> {
     }
 }
 
-fn dereference_type_pointer(
-    context: &ExpressionContext,
-    handle: Handle<crate::Type>,
-    is_access: bool,
-) -> crate::TypeInner {
-    match &context.module.types[handle].inner {
-        crate::TypeInner::Pointer { base, .. } => {
-            dereference_type_pointer(context, *base, is_access)
-        }
-        &crate::TypeInner::Vector { kind, width, .. } if is_access => {
-            crate::TypeInner::Scalar { kind, width }
-        }
-        ty => ty.clone(),
-    }
-}
-
-fn resolve_expression_to_type_inner(
-    context: &ExpressionContext,
-    handle: Handle<crate::Expression>,
-    is_access: bool,
-) -> Option<(Handle<crate::Type>, bool)> {
-    match &context.function.expressions[handle] {
-        crate::Expression::Load { pointer } => {
-            resolve_expression_to_type_inner(context, *pointer, is_access)
-        }
-        crate::Expression::LocalVariable(local) => {
-            let local = &context.function.local_variables[*local];
-            Some((local.ty, is_access))
-        }
-        crate::Expression::Access { base, .. } => {
-            resolve_expression_to_type_inner(context, *base, true)
-        }
-        crate::Expression::FunctionArgument(argument_index) => {
-            let argument = &context.function.arguments[*argument_index as usize];
-            Some((argument.ty, is_access))
-        }
-        _ => None,
-    }
-}
-
-fn resolve_expression_to_type<'a>(
-    context: &'a ExpressionContext,
-    handle: Handle<crate::Expression>,
-) -> Option<&'a crate::Type> {
-    resolve_expression_to_type_inner(context, handle, false)
-        .map(|(ty, _)| &context.module.types[ty])
-}
-
-fn resolve_expression_to_dereferenced_type(
-    context: &ExpressionContext,
-    handle: Handle<crate::Expression>,
-) -> Option<crate::TypeInner> {
-    resolve_expression_to_type_inner(context, handle, false)
-        .map(|(ty, is_access)| dereference_type_pointer(context, ty, is_access))
-}
-
 pub struct Writer<W> {
     out: W,
     names: FastHashMap<NameKey, String>,
@@ -610,13 +554,13 @@ impl<W: Write> Writer<W> {
         log::trace!("expression {:?} = {:?}", expr_handle, expression);
         match *expression {
             crate::Expression::Access { base, index } => {
-                let should_dereference = matches!(
-                    resolve_expression_to_type(context, base),
-                    Some(crate::Type {
-                        inner: crate::TypeInner::Pointer { .. },
-                        ..
-                    })
-                );
+                let should_dereference = match context.info[base].ty {
+                    TypeResolution::Handle(handle) => {
+                        let ty = &context.module.types[handle];
+                        matches!(ty.inner, crate::TypeInner::Pointer { .. })
+                    }
+                    _ => false,
+                };
 
                 if should_dereference {
                     write!(self.out, "(*")?;
@@ -958,10 +902,13 @@ impl<W: Write> Writer<W> {
                 use crate::MathFunction as Mf;
 
                 let ignore = fun == Mf::Length
-                    && matches!(
-                        resolve_expression_to_dereferenced_type(context, arg),
-                        Some(crate::TypeInner::Scalar { .. })
-                    );
+                    && match &context.info[arg].ty {
+                        TypeResolution::Handle(handle) => {
+                            let ty = &context.module.types[*handle];
+                            matches!(ty.inner, crate::TypeInner::Scalar { .. })
+                        }
+                        TypeResolution::Value(ty) => matches!(ty, crate::TypeInner::Scalar { .. }),
+                    };
 
                 let fun_name = match fun {
                     // comparison
