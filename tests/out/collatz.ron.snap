@@ -16,22 +16,22 @@ expression: output
             inner: Array(
                 base: 1,
                 size: Dynamic,
-                stride: Some(4),
+                stride: 4,
             ),
         ),
         (
             name: Some("PrimeIndices"),
             inner: Struct(
-                block: true,
+                level: Root,
                 members: [
                     (
                         name: Some("data"),
                         ty: 2,
                         binding: None,
-                        size: None,
-                        align: None,
+                        offset: 0,
                     ),
                 ],
+                span: 4,
             ),
         ),
         (
