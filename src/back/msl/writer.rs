@@ -71,6 +71,62 @@ impl<'a> TypedGlobalVariable<'a> {
     }
 }
 
+fn dereference_type_pointer(
+    context: &ExpressionContext,
+    handle: Handle<crate::Type>,
+    is_access: bool,
+) -> crate::TypeInner {
+    match &context.module.types[handle].inner {
+        crate::TypeInner::Pointer { base, .. } => {
+            dereference_type_pointer(context, *base, is_access)
+        }
+        &crate::TypeInner::Vector { kind, width, .. } if is_access => {
+            crate::TypeInner::Scalar { kind, width }
+        }
+        ty => ty.clone(),
+    }
+}
+
+fn resolve_expression_to_type_inner(
+    context: &ExpressionContext,
+    handle: Handle<crate::Expression>,
+    is_access: bool,
+) -> Option<(Handle<crate::Type>, bool)> {
+    match &context.function.expressions[handle] {
+        crate::Expression::Load { pointer } => {
+            resolve_expression_to_type_inner(context, *pointer, is_access)
+        }
+        crate::Expression::LocalVariable(local) => {
+            let local = &context.function.local_variables[*local];
+            Some((local.ty, is_access))
+        }
+        crate::Expression::Access { base, .. } => {
+            resolve_expression_to_type_inner(context, *base, true)
+        }
+        crate::Expression::FunctionArgument(argument_index) => {
+            let argument = &context.function.arguments[*argument_index as usize];
+            Some((argument.ty, is_access))
+        }
+        _ => None,
+    }
+}
+
+fn resolve_expression_to_type<'a>(
+    context: &'a ExpressionContext,
+    handle: Handle<crate::Expression>,
+) -> Option<&'a crate::Type> {
+    resolve_expression_to_type_inner(context, handle, false)
+        .map(|(ty, _)| &context.module.types[ty])
+}
+
+fn resolve_expression_to_dereferenced_type(
+    context: &ExpressionContext,
+    handle: Handle<crate::Expression>,
+) -> Option<crate::TypeInner> {
+    resolve_expression_to_type_inner(context, handle, false)
+        .map(|(ty, is_access)| dereference_type_pointer(context, ty, is_access))
+}
+
 pub struct Writer<W> {
     out: W,
     names: FastHashMap<NameKey, String>,
@@ -331,7 +387,21 @@ impl<W: Write> Writer<W> {
         log::trace!("expression {:?} = {:?}", expr_handle, expression);
         match *expression {
             crate::Expression::Access { base, index } => {
+                let should_dereference = matches!(
+                    resolve_expression_to_type(context, base),
+                    Some(crate::Type {
+                        inner: crate::TypeInner::Pointer { .. },
+                        ..
+                    })
+                );
+
+                if should_dereference {
+                    write!(self.out, "(*")?;
+                }
                 self.put_expression(base, context, false)?;
+                if should_dereference {
+                    write!(self.out, ")")?;
+                }
                 write!(self.out, "[")?;
                 self.put_expression(index, context, true)?;
                 write!(self.out, "]")?;
@@ -664,6 +734,12 @@ impl<W: Write> Writer<W> {
             } => {
                 use crate::MathFunction as Mf;
 
+                let ignore = fun == Mf::Length
+                    && matches!(
+                        resolve_expression_to_dereferenced_type(context, arg),
+                        Some(crate::TypeInner::Scalar { .. })
+                    );
+
                 let fun_name = match fun {
                     // comparison
                     Mf::Abs => "abs",
@@ -721,8 +797,12 @@ impl<W: Write> Writer<W> {
                     Mf::ReverseBits => "reverse_bits",
                 };
 
-                write!(self.out, "{}::{}", NAMESPACE, fun_name)?;
-                self.put_call_parameters(iter::once(arg).chain(arg1).chain(arg2), context)?;
+                if ignore {
+                    self.put_expression(arg, context, is_scoped)?;
+                } else {
+                    write!(self.out, "{}::{}", NAMESPACE, fun_name)?;
+                    self.put_call_parameters(iter::once(arg).chain(arg1).chain(arg2), context)?;
+                }
             }
             crate::Expression::As {
                 expr,
@@ -1004,7 +1084,18 @@ impl<W: Write> Writer<W> {
                             writeln!(self.out, "[_i];")?;
                         }
                         None => {
+                            let should_dereference = match pointer_info.ty {
+                                TypeResolution::Handle(handle) => {
+                                    let ty = &context.expression.module.types[handle];
+                                    matches!(ty.inner, crate::TypeInner::Pointer { .. })
+                                }
+                                TypeResolution::Value(_) => false,
+                            };
+
                             write!(self.out, "{}", level)?;
+                            if should_dereference {
+                                write!(self.out, "*")?;
+                            }
                             self.put_expression(pointer, &context.expression, true)?;
                             write!(self.out, " = ")?;
                             self.put_expression(value, &context.expression, true)?;
