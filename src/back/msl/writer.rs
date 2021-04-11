@@ -668,7 +668,17 @@ impl<W: Write> Writer<W> {
                 write!(self.out, "{}", name)?;
             }
             crate::Expression::Load { pointer } => {
-                //write!(self.out, "*")?;
+                let should_dereference = match &context.function.expressions[pointer] {
+                    crate::Expression::AccessIndex { .. } => false,
+                    crate::Expression::Access { .. } => false,
+                    crate::Expression::LocalVariable { .. } => false,
+                    crate::Expression::GlobalVariable { .. } => false,
+                    _ => true,
+                };
+
+                if should_dereference {
+                    write!(self.out, "*")?;
+                }
                 self.put_expression(pointer, context, is_scoped)?;
             }
             crate::Expression::ImageSample {
