@@ -306,7 +306,8 @@ struct LookupExpression {
     ///
     /// Note that, while a SPIR-V result id can be used in any block dominated
     /// by its definition, a Naga `Expression` is only in scope for the rest of
-    /// its subtree. `Parser::get_expr_handle` takes care of
+    /// its subtree. `Parser::get_expr_handle` takes care of spilling the result
+    /// to a `LocalVariable` which can then be used anywhere.
     handle: Handle<crate::Expression>,
 
     /// The SPIR-V type of this result.
@@ -2392,6 +2393,34 @@ impl<I: Iterator<Item = u32>> Parser<I> {
                         },
                     );
                 }
+                Op::BitReverse | Op::BitCount => {
+                    inst.expect(4)?;
+
+                    let result_type_id = self.next()?;
+                    let result_id = self.next()?;
+                    let base_id = self.next()?;
+                    let base_lexp = self.lookup_expression.lookup(base_id)?;
+                    let base_handle = get_expr_handle!(base_id, base_lexp);
+                    let expr = crate::Expression::Math {
+                        fun: match inst.op {
+                            Op::BitReverse => crate::MathFunction::ReverseBits,
+                            Op::BitCount => crate::MathFunction::CountOneBits,
+                            _ => unreachable!(),
+                        },
+                        arg: base_handle,
+                        arg1: None,
+                        arg2: None,
+                        arg3: None,
+                    };
+                    self.lookup_expression.insert(
+                        result_id,
+                        LookupExpression {
+                            handle: ctx.expressions.append(expr, span),
+                            type_id: result_type_id,
+                            block_id,
+                        },
+                    );
+                }
                 Op::OuterProduct => {
                     inst.expect(5)?;
 
@@ -2710,10 +2739,12 @@ impl<I: Iterator<Item = u32>> Parser<I> {
 
                     let value_lexp = self.lookup_expression.lookup(value_id)?;
                     let ty_lookup = self.lookup_type.lookup(result_type_id)?;
-                    let (kind, width) = match ctx.type_arena[ty_lookup.handle].inner {
-                        crate::TypeInner::Scalar { kind, width }
-                        | crate::TypeInner::Vector { kind, width, .. } => (kind, width),
-                        crate::TypeInner::Matrix { width, .. } => (crate::ScalarKind::Float, width),
+                    let (kind, width, is_scalar) = match ctx.type_arena[ty_lookup.handle].inner {
+                        crate::TypeInner::Scalar { kind, width } => (kind, width, true),
+                        crate::TypeInner::Vector { kind, width, .. } => (kind, width, false),
+                        crate::TypeInner::Matrix { width, .. } => {
+                            (crate::ScalarKind::Float, width, false)
+                        }
                         _ => return Err(Error::InvalidAsType(ty_lookup.handle)),
                     };
 
@@ -2722,7 +2753,8 @@ impl<I: Iterator<Item = u32>> Parser<I> {
                         kind,
                         convert: if kind == crate::ScalarKind::Bool {
                             Some(crate::BOOL_WIDTH)
-                        } else if inst.op == Op::Bitcast {
+                        // If we're bitcasting scalars then we don't need to set the width.
+                        } else if inst.op == Op::Bitcast && is_scalar {
                             None
                         } else {
                             Some(width)
