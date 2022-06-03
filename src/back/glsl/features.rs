@@ -82,7 +82,7 @@ impl FeaturesManager {
             // Used when both core and es support the feature
             ($feature:ident, $core:literal, $es:literal) => {
                 if self.0.contains(Features::$feature)
-                    && (version < Version::Desktop($core) || version < Version::Embedded($es))
+                    && (version < Version::Desktop($core) || version < Version::embedded($es))
                 {
                     missing |= Features::$feature;
                 }
@@ -106,7 +106,10 @@ impl FeaturesManager {
         check_feature!(CULL_DISTANCE, 450, 300);
         check_feature!(SAMPLE_VARIABLES, 400, 300);
         check_feature!(DYNAMIC_ARRAY_SIZE, 430, 310);
-        //check_feature!(MULTI_VIEW, 140, 310);
+        match version {
+            Version::Embedded { is_webgl: true, .. } => check_feature!(MULTI_VIEW, 140, 300),
+            _ => check_feature!(MULTI_VIEW, 140, 310),
+        };
         // Only available on glsl core, this means that opengl es can't query the number
         // of samples nor levels in a image and neither do bound checks on the sample nor
         // the level argument of texelFecth
@@ -212,15 +215,16 @@ impl FeaturesManager {
         }
 
         if self.0.contains(Features::MULTI_VIEW) {
-            if !version.is_es() {
+            if let Version::Embedded { is_webgl: true, .. } = version {
+                // https://www.khronos.org/registry/OpenGL/extensions/OVR/OVR_multiview2.txt
+                writeln!(out, "#extension GL_OVR_multiview2 : require")?;
+            } else {
                 // https://github.com/KhronosGroup/GLSL/blob/master/extensions/ext/GL_EXT_multiview.txt
                 writeln!(out, "#extension GL_EXT_multiview : require")?;
-            } else {
-                writeln!(out, "#extension GL_OVR_multiview2 : require")?;
             }
         }
 
-        if self.0.contains(Features::FMA) && version >= Version::Embedded(310) {
+        if self.0.contains(Features::FMA) && version >= Version::embedded(310) {
             // https://www.khronos.org/registry/OpenGL/extensions/EXT/EXT_gpu_shader5.txt
             writeln!(out, "#extension GL_EXT_gpu_shader5 : require")?;
         }
