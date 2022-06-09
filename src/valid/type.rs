@@ -214,7 +214,7 @@ impl super::Validator {
             crate::ScalarKind::Float => {
                 width == 4 || (width == 8 && self.capabilities.contains(Capabilities::FLOAT64))
             }
-            crate::ScalarKind::Sint | crate::ScalarKind::Uint => width == 4,
+            crate::ScalarKind::Sint | crate::ScalarKind::Uint => true,
         }
     }
 

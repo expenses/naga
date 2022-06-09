@@ -46,14 +46,14 @@ struct Args {
     entry_point: Option<String>,
 
     /// the shader profile to use, for example `es`, `core`, `es330`, if translating to GLSL
-    #[argh(option)]
-    profile: Option<GlslProfileArg>,
+    //#[argh(option)]
+    //profile: Option<GlslProfileArg>,
 
     /// the shader model to use if targeting HLSL
     ///
     /// May be `50`, 51`, or `60`
-    #[argh(option)]
-    shader_model: Option<ShaderModelArg>,
+    //#[argh(option)]
+    //shader_model: Option<ShaderModelArg>,
 
     /// if the selected frontends/backends support coordinate space conversions,
     /// disable them
@@ -102,7 +102,7 @@ impl FromStr for BoundsCheckPolicyArg {
         }))
     }
 }
-
+/*
 /// Newtype so we can implement [`FromStr`] for `ShaderModel`.
 #[derive(Debug, Clone)]
 struct ShaderModelArg(naga::back::hlsl::ShaderModel);
@@ -119,8 +119,8 @@ impl FromStr for ShaderModelArg {
             _ => return Err(format!("Invalid value for --shader-model: {}", s)),
         }))
     }
-}
-
+}*/
+/*
 /// Newtype so we can implement [`FromStr`] for [`naga::back::glsl::Version`].
 #[derive(Clone, Debug)]
 struct GlslProfileArg(naga::back::glsl::Version);
@@ -139,6 +139,7 @@ impl FromStr for GlslProfileArg {
         }))
     }
 }
+*/
 
 #[derive(Default)]
 struct Parameters {
@@ -147,10 +148,10 @@ struct Parameters {
     entry_point: Option<String>,
     keep_coordinate_space: bool,
     spv_block_ctx_dump_prefix: Option<String>,
-    spv: naga::back::spv::Options,
+    //spv: naga::back::spv::Options,
     msl: naga::back::msl::Options,
-    glsl: naga::back::glsl::Options,
-    hlsl: naga::back::hlsl::Options,
+    //glsl: naga::back::glsl::Options,
+    //hlsl: naga::back::hlsl::Options,
 }
 
 trait PrettyResult {
@@ -251,15 +252,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
     params.spv_block_ctx_dump_prefix = args.block_ctx_dir;
     params.entry_point = args.entry_point;
-    if let Some(version) = args.profile {
-        params.glsl.version = version.0;
+    /*if let Some(version) = args.profile {
+        //params.glsl.version = version.0;
     }
     if let Some(model) = args.shader_model {
-        params.hlsl.shader_model = model.0;
-    }
+        //params.hlsl.shader_model = model.0;
+    }*/
     params.keep_coordinate_space = args.keep_coordinate_space;
 
-    let (module, input_text) = match Path::new(&input_path)
+    let (module, input_text): (_, Option<&'static str>) = match Path::new(&input_path)
         .extension()
         .ok_or(CliError("Input filename has no extension"))?
         .to_str()
@@ -276,7 +277,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             };
             naga::front::spv::parse_u8_slice(&input, &options).map(|m| (m, None))?
         }
-        "wgsl" => {
+        /*"wgsl" => {
             let input = String::from_utf8(input)?;
             let result = naga::front::wgsl::parse_str(&input);
             match result {
@@ -287,8 +288,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     return Err(CliError("Could not parse WGSL").into());
                 }
             }
-        }
-        ext @ ("vert" | "frag" | "comp") => {
+        }*/
+        /*ext @ ("vert" | "frag" | "comp") => {
             let input = String::from_utf8(input)?;
             let mut parser = naga::front::glsl::Parser::default();
 
@@ -313,8 +314,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }),
                 Some(input),
             )
-        }
-        _ => return Err(CliError("Unknown input file extension").into()),
+        }*/
+        ext => {
+            //panic!("{}", ext);
+            return Err(CliError("Unknown input file extension").into())
+        },
     };
 
     // Decide which capabilities our output formats can support.
@@ -395,7 +399,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_pretty();
                 fs::write(output_path, msl)?;
             }
-            "spv" => {
+            /*"spv" => {
                 use naga::back::spv;
 
                 let pipeline_options_owned;
@@ -439,8 +443,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     });
 
                 fs::write(output_path, bytes.as_slice())?;
-            }
-            stage @ ("vert" | "frag" | "comp") => {
+            }*/
+            /*stage @ ("vert" | "frag" | "comp") => {
                 use naga::back::glsl;
 
                 let pipeline_options = glsl::PipelineOptions {
@@ -471,14 +475,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_pretty();
                 writer.write()?;
                 fs::write(output_path, buffer)?;
-            }
-            "dot" => {
+            }*/
+            /*"dot" => {
                 use naga::back::dot;
 
                 let output = dot::write(&module, info.as_ref())?;
                 fs::write(output_path, output)?;
-            }
-            "hlsl" => {
+            }*/
+            /*"hlsl" => {
                 use naga::back::hlsl;
                 let mut buffer = String::new();
                 let mut writer = hlsl::Writer::new(&mut buffer, &params.hlsl);
@@ -492,8 +496,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     )
                     .unwrap_pretty();
                 fs::write(output_path, buffer)?;
-            }
-            "wgsl" => {
+            }*/
+            /*"wgsl" => {
                 use naga::back::wgsl;
 
                 let wgsl = wgsl::write_string(
@@ -506,7 +510,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .unwrap_pretty();
                 fs::write(output_path, wgsl)?;
-            }
+            }*/
             other => {
                 println!("Unknown output extension: {}", other);
             }
@@ -525,7 +529,7 @@ use codespan_reporting::{
     },
 };
 use naga::WithSpan;
-
+/*
 pub fn emit_glsl_parser_error(errors: Vec<naga::front::glsl::Error>, filename: &str, source: &str) {
     let files = SimpleFile::new(filename, source);
     let config = codespan_reporting::term::Config::default();
@@ -541,6 +545,7 @@ pub fn emit_glsl_parser_error(errors: Vec<naga::front::glsl::Error>, filename: &
         term::emit(&mut writer.lock(), &config, &files, &diagnostic).expect("cannot write error");
     }
 }
+*/
 
 pub fn emit_annotated_error<E: Error>(ann_err: &WithSpan<E>, filename: &str, source: &str) {
     let files = SimpleFile::new(filename, source);

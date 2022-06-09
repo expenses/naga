@@ -148,7 +148,10 @@ pub(super) fn map_builtin(word: spirv::Word, invariant: bool) -> Result<crate::B
         Some(Bi::WorkgroupId) => crate::BuiltIn::WorkGroupId,
         Some(Bi::WorkgroupSize) => crate::BuiltIn::WorkGroupSize,
         Some(Bi::NumWorkgroups) => crate::BuiltIn::NumWorkGroups,
-        _ => return Err(Error::UnsupportedBuiltIn(word)),
+        x => {
+            dbg!(&x);
+            return Err(Error::UnsupportedBuiltIn(word))
+        },
     })
 }
 

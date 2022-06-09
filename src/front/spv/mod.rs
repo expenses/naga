@@ -80,6 +80,8 @@ pub const SUPPORTED_EXTENSIONS: &[&str] = &[
     "SPV_KHR_storage_buffer_storage_class",
     "SPV_KHR_vulkan_memory_model",
     "SPV_KHR_multiview",
+    "SPV_KHR_8bit_storage",
+    "SPV_NV_mesh_shader"
 ];
 pub const SUPPORTED_EXT_SETS: &[&str] = &["GLSL.std.450"];
 
@@ -243,12 +245,15 @@ impl Decoration {
                 interpolation,
                 sampling,
                 ..
-            } => Ok(crate::Binding::Location {
+            } => {dbg!(self);Ok(crate::Binding::Location {
                 location,
                 interpolation,
                 sampling,
-            }),
-            _ => Err(Error::MissingDecoration(spirv::Decoration::Location)),
+            })},
+            _ => {
+                return Ok(crate::Binding::MeshInput);
+                Err(Error::MissingDecoration(spirv::Decoration::Location))
+            },
         }
     }
 }
@@ -271,6 +276,8 @@ struct EntryPoint {
     early_depth_test: Option<crate::EarlyDepthTest>,
     workgroup_size: [u32; 3],
     variable_ids: Vec<spirv::Word>,
+    output_vertices: Option<u32>,
+    output_primitives: Option<u32>,
 }
 
 #[derive(Clone, Debug)]
@@ -620,7 +627,7 @@ impl<I: Iterator<Item = u32>> Parser<I> {
         if wc == 0 {
             return Err(Error::InvalidWordCount);
         }
-        let op = spirv::Op::from_u16(opcode).ok_or(Error::UnknownInstruction(opcode))?;
+        let op = spirv::Op::from_u32(opcode as u32).ok_or(Error::UnknownInstruction(opcode))?;
 
         Ok(Instruction { op, wc })
     }
@@ -3856,12 +3863,18 @@ impl<I: Iterator<Item = u32>> Parser<I> {
                 spirv::ExecutionModel::Vertex => crate::ShaderStage::Vertex,
                 spirv::ExecutionModel::Fragment => crate::ShaderStage::Fragment,
                 spirv::ExecutionModel::GLCompute => crate::ShaderStage::Compute,
-                _ => return Err(Error::UnsupportedExecutionModel(exec_model as u32)),
+                spirv::ExecutionModel::MeshNV => crate::ShaderStage::Mesh,
+                _ => {
+                    println!("{:?}", exec_model);
+                    return Err(Error::UnsupportedExecutionModel(exec_model as u32))
+                },
             },
             name,
             early_depth_test: None,
             workgroup_size: [0; 3],
             variable_ids: self.data.by_ref().take(left as usize).collect(),
+            output_vertices: None,
+            output_primitives: None,
         };
         self.lookup_entry_point.insert(function_id, ep);
         Ok(())
@@ -3914,7 +3927,19 @@ impl<I: Iterator<Item = u32>> Parser<I> {
             ExecutionMode::LocalSize => {
                 ep.workgroup_size = [args[0], args[1], args[2]];
             }
-            _ => {
+            ExecutionMode::OutputVertices => {
+                dbg!(&args);
+                ep.output_vertices = Some(args[0]);
+            }
+            ExecutionMode::OutputTrianglesNV => {
+                // Not sure what else could be output.
+            }
+            ExecutionMode::OutputPrimitivesNV => {
+                dbg!(&args);
+                ep.output_primitives = Some(args[0]);
+            }
+            e => {
+                println!("{:?}", e);
                 return Err(Error::UnsupportedExecutionMode(mode_id));
             }
         }
@@ -4230,7 +4255,7 @@ impl<I: Iterator<Item = u32>> Parser<I> {
             }
         } else {
             match map_storage_class(storage_class)? {
-                ExtendedClass::Global(space) => space,
+                ExtendedClass::Global(space) => dbg!(space),
                 ExtendedClass::Input | ExtendedClass::Output => crate::AddressSpace::Private,
             }
         };
@@ -4919,6 +4944,7 @@ impl<I: Iterator<Item = u32>> Parser<I> {
                         }
                     }
                     Some(crate::Binding::Location { .. }) => None,
+                    Some(_) => None,
                     None => match module.types[effective_ty].inner {
                         crate::TypeInner::Struct { ref members, .. } => {
                             // A temporary to avoid borrowing `module.types`

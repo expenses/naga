@@ -88,6 +88,7 @@ pub struct PerStageMap {
     pub vs: PerStageResources,
     pub fs: PerStageResources,
     pub cs: PerStageResources,
+    pub mesh: PerStageResources,
 }
 
 impl ops::Index<crate::ShaderStage> for PerStageMap {
@@ -97,6 +98,7 @@ impl ops::Index<crate::ShaderStage> for PerStageMap {
             crate::ShaderStage::Vertex => &self.vs,
             crate::ShaderStage::Fragment => &self.fs,
             crate::ShaderStage::Compute => &self.cs,
+            crate::ShaderStage::Mesh => &self.mesh,
         }
     }
 }
@@ -111,6 +113,7 @@ enum ResolvedBinding {
         interpolation: Option<ResolvedInterpolation>,
     },
     Resource(BindTarget),
+    Whatever,
 }
 
 #[derive(Copy, Clone)]
@@ -140,8 +143,8 @@ pub enum Error {
     UnsupportedCall(String),
     #[error("feature '{0}' is not implemented yet")]
     FeatureNotImplemented(String),
-    #[error("module is not valid")]
-    Validation,
+    #[error("module is not valid: {0}")]
+    Validation(&'static str),
     #[error("BuiltIn {0:?} is not supported")]
     UnsupportedBuiltIn(crate::BuiltIn),
     #[error("capability {0:?} is not supported")]
@@ -240,6 +243,7 @@ impl Options {
         mode: LocationMode,
     ) -> Result<ResolvedBinding, Error> {
         match *binding {
+            crate::Binding::MeshInput => Ok(ResolvedBinding::Whatever),
             crate::Binding::BuiltIn(mut built_in) => {
                 if let crate::BuiltIn::Position { ref mut invariant } = built_in {
                     if *invariant && self.lang_version < (2, 1) {
@@ -274,9 +278,14 @@ impl Options {
                             // unwrap: The verifier ensures that vertex shader outputs and fragment
                             // shader inputs always have fully specified interpolation, and that
                             // sampling is `None` only for Flat interpolation.
-                            let interpolation = interpolation.unwrap();
-                            let sampling = sampling.unwrap_or(crate::Sampling::Center);
-                            Some(ResolvedInterpolation::from_binding(interpolation, sampling))
+                            match interpolation {
+                                Some(interpolation) => {
+                                    let sampling = sampling.unwrap_or(crate::Sampling::Center);
+                                    Some(ResolvedInterpolation::from_binding(interpolation, sampling))
+                                },
+                                None => None
+                            }
+                            
                         },
                     })
                 }
@@ -285,7 +294,7 @@ impl Options {
                         "Unexpected Binding::Location({}) for the Uniform mode",
                         location
                     );
-                    Err(Error::Validation)
+                    Err(Error::Validation("mmod.rs"))
                 }
             },
         }
@@ -315,6 +324,7 @@ impl Options {
             crate::ShaderStage::Vertex => self.per_stage_map.vs.push_constant_buffer,
             crate::ShaderStage::Fragment => self.per_stage_map.fs.push_constant_buffer,
             crate::ShaderStage::Compute => self.per_stage_map.cs.push_constant_buffer,
+            crate::ShaderStage::Mesh => self.per_stage_map.mesh.push_constant_buffer,
         };
         match slot {
             Some(slot) => Ok(ResolvedBinding::Resource(BindTarget {
@@ -431,7 +441,8 @@ impl ResolvedBinding {
                 } else {
                     return Err(Error::UnimplementedBindTarget(target.clone()));
                 }
-            }
+            },
+            Self::Whatever => {}
         }
         write!(out, "]]")?;
         Ok(())

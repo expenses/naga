@@ -766,7 +766,9 @@ impl<W: Write> Writer<W> {
             crate::TypeInner::Vector { size, .. } => {
                 put_numeric_type(&mut self.out, crate::ScalarKind::Uint, &[size])?
             }
-            _ => return Err(Error::Validation),
+            _ => {
+                return Err(Error::Validation("put_cast_to_uint_scalar_or_vector"))
+            },
         };
 
         write!(self.out, "(")?;
@@ -1137,13 +1139,15 @@ impl<W: Write> Writer<W> {
         let (offset, array_ty) = match context.module.types[global.ty].inner {
             crate::TypeInner::Struct { ref members, .. } => match members.last() {
                 Some(&crate::StructMember { offset, ty, .. }) => (offset, ty),
-                None => return Err(Error::Validation),
+                None => {
+                    return Err(Error::Validation("put_dynamic_array_max_index 0"))
+                },
             },
             crate::TypeInner::Array {
                 size: crate::ArraySize::Dynamic,
                 ..
             } => (0, global.ty),
-            _ => return Err(Error::Validation),
+            _ => return Err(Error::Validation("put_dynamic_array_max_index 1")),
         };
 
         let (size, stride) = match context.module.types[array_ty].inner {
@@ -1153,7 +1157,7 @@ impl<W: Write> Writer<W> {
                     .size(&context.module.constants),
                 stride,
             ),
-            _ => return Err(Error::Validation),
+            _ => return Err(Error::Validation("put_dynamic_array_max_index 2")),
         };
 
         // When the stride length is larger than the size, the final element's stride of
@@ -1313,7 +1317,7 @@ impl<W: Write> Writer<W> {
             crate::Expression::Splat { size, value } => {
                 let scalar_kind = match *context.resolve_type(value) {
                     crate::TypeInner::Scalar { kind, .. } => kind,
-                    _ => return Err(Error::Validation),
+                    _ => return Err(Error::Validation("splat")),
                 };
                 put_numeric_type(&mut self.out, scalar_kind, &[size])?;
                 write!(self.out, "(")?;
@@ -1474,7 +1478,7 @@ impl<W: Write> Writer<W> {
                     Uo::Not => match context.resolve_type(expr).scalar_kind() {
                         Some(Sk::Sint) | Some(Sk::Uint) => "~",
                         Some(Sk::Bool) => "!",
-                        _ => return Err(Error::Validation),
+                        _ => return Err(Error::Validation("unary")),
                     },
                 };
                 write!(self.out, "{}", op_str)?;
@@ -1573,7 +1577,7 @@ impl<W: Write> Writer<W> {
                     self.put_expression(condition, context, true)?;
                     write!(self.out, ")")?;
                 }
-                _ => return Err(Error::Validation),
+                _ => return Err(Error::Validation("other")),
             },
             crate::Expression::Derivative { axis, expr } => {
                 let op = match axis {
@@ -1755,13 +1759,14 @@ impl<W: Write> Writer<W> {
                 } => {
                     let is_bool_cast =
                         kind == crate::ScalarKind::Bool || src_kind == crate::ScalarKind::Bool;
+                        dbg!(&convert, src_width);
                     let op = match convert {
                         Some(w) if w == src_width || is_bool_cast => "static_cast",
                         Some(8) if kind == crate::ScalarKind::Float => {
                             return Err(Error::CapabilityNotSupported(valid::Capabilities::FLOAT64))
                         }
-                        Some(_) => return Err(Error::Validation),
-                        None => "as_type",
+                        Some(4) | None => "as_type",
+                        Some(_) => return Err(Error::Validation("expression as ")),
                     };
                     write!(self.out, "{}<", op)?;
                     match *context.resolve_type(expr) {
@@ -1780,7 +1785,7 @@ impl<W: Write> Writer<W> {
                     self.put_expression(expr, context, true)?;
                     write!(self.out, ")")?;
                 }
-                _ => return Err(Error::Validation),
+                _ => return Err(Error::Validation("other after matrix")),
             },
             // has to be a named expression
             crate::Expression::CallResult(_) | crate::Expression::AtomicResult { .. } => {
@@ -1792,11 +1797,11 @@ impl<W: Write> Writer<W> {
                     crate::Expression::AccessIndex { base, .. } => {
                         match context.function.expressions[base] {
                             crate::Expression::GlobalVariable(handle) => handle,
-                            _ => return Err(Error::Validation),
+                            _ => return Err(Error::Validation("array len 0")),
                         }
                     }
                     crate::Expression::GlobalVariable(handle) => handle,
-                    _ => return Err(Error::Validation),
+                    _ => return Err(Error::Validation("array len 1")),
                 };
 
                 if !is_scoped {
@@ -1928,7 +1933,7 @@ impl<W: Write> Writer<W> {
                             let global = context
                                 .function
                                 .originating_global(base)
-                                .ok_or(Error::Validation)?;
+                                .ok_or(Error::Validation("dynamic index length"))?;
                             write!(self.out, "1 + ")?;
                             self.put_dynamic_array_max_index(global, context)?
                         }
@@ -2088,7 +2093,7 @@ impl<W: Write> Writer<W> {
                     let global = context
                         .function
                         .originating_global(base)
-                        .ok_or(Error::Validation)?;
+                        .ok_or(Error::Validation("dynamic thing 2"))?;
                     self.put_dynamic_array_max_index(global, context)?;
                 }
             }
@@ -3410,6 +3415,9 @@ impl<W: Write> Writer<W> {
                 ),
                 crate::ShaderStage::Compute { .. } => {
                     ("kernel", LocationMode::Uniform, LocationMode::Uniform)
+                },
+                crate::ShaderStage::Mesh {  .. } => {
+                    ("[[mesh]]", LocationMode::Uniform, LocationMode::VertexOutput)
                 }
             };
 
@@ -3504,12 +3512,11 @@ impl<W: Write> Writer<W> {
                             binding: None,
                             first_time: true,
                         };
-                        let binding = binding.ok_or(Error::Validation)?;
 
-                        match *binding {
+                        match binding {
                             // Point size is only supported in VS of pipelines with
                             // point primitive topology.
-                            crate::Binding::BuiltIn(crate::BuiltIn::PointSize) => {
+                            Some(crate::Binding::BuiltIn(crate::BuiltIn::PointSize)) => {
                                 has_point_size = true;
                                 if !pipeline_options.allow_point_size {
                                     continue;
@@ -3519,26 +3526,32 @@ impl<W: Write> Writer<W> {
                             // But we can't return UnsupportedBuiltIn error to user.
                             // Because otherwise we can't generate msl shader from any glslang SPIR-V shaders.
                             // glslang generates gl_PerVertex struct with gl_CullDistance builtin inside by default.
-                            crate::Binding::BuiltIn(crate::BuiltIn::CullDistance) => {
+                            Some(crate::Binding::BuiltIn(crate::BuiltIn::CullDistance)) => {
                                 log::warn!("Ignoring CullDistance BuiltIn");
                                 continue;
                             }
                             _ => {}
                         }
 
-                        let array_len = match module.types[ty].inner {
+                        let mut array_len = match module.types[ty].inner {
                             crate::TypeInner::Array {
                                 size: crate::ArraySize::Constant(handle),
                                 ..
-                            } => module.constants[handle].to_array_length(),
+                            } => dbg!(&module.constants[handle]).to_array_length(),
                             _ => None,
                         };
-                        let resolved = options.resolve_local_binding(binding, out_mode)?;
-                        write!(self.out, "{}{} {}", back::INDENT, ty_name, name)?;
-                        if let Some(array_len) = array_len {
-                            write!(self.out, " [{}]", array_len)?;
+                        if ep.stage == crate::ShaderStage::Mesh {
+                            array_len = None;
                         }
-                        resolved.try_fmt(&mut self.out)?;
+                        dbg!(array_len);
+                        if let Some(binding) = binding {
+                            let resolved = options.resolve_local_binding(binding, out_mode)?;
+                            write!(self.out, "{}{} {}", back::INDENT, ty_name, name)?;
+                            if let Some(array_len) = array_len {
+                                write!(self.out, " [{}]", array_len)?;
+                            }
+                            resolved.try_fmt(&mut self.out)?;
+                        }
                         writeln!(self.out, ";")?;
                     }
 

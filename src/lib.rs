@@ -291,6 +291,7 @@ pub enum ShaderStage {
     Vertex,
     Fragment,
     Compute,
+    Mesh,
 }
 
 /// Addressing space of variables.
@@ -812,6 +813,8 @@ pub enum Binding {
         interpolation: Option<Interpolation>,
         sampling: Option<Sampling>,
     },
+
+    MeshInput,
 }
 
 /// Pipeline binding information for global resources.
@@ -1651,6 +1654,8 @@ pub struct EntryPoint {
     pub workgroup_size: [u32; 3],
     /// The entrance function.
     pub function: Function,
+    pub output_vertices: Option<u32>,
+    pub output_primitives: Option<u32>,
 }
 
 /// Shader module.

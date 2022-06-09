@@ -181,6 +181,7 @@ impl VaryingContext<'_> {
                             St::Vertex => self.output,
                             St::Fragment => !self.output,
                             St::Compute => false,
+                            St::Mesh => true,
                         },
                         *ty_inner
                             == Ti::Vector {
@@ -193,6 +194,7 @@ impl VaryingContext<'_> {
                         match self.stage {
                             St::Vertex | St::Fragment => !self.output,
                             St::Compute => false,
+                            St::Mesh => true,
                         },
                         *ty_inner
                             == Ti::Scalar {
@@ -253,7 +255,7 @@ impl VaryingContext<'_> {
                     | Bi::WorkGroupId
                     | Bi::WorkGroupSize
                     | Bi::NumWorkGroups => (
-                        self.stage == St::Compute && !self.output,
+                        (self.stage == St::Compute || self.stage == St::Mesh) && !self.output,
                         *ty_inner
                             == Ti::Vector {
                                 size: Vs::Tri,
@@ -281,7 +283,7 @@ impl VaryingContext<'_> {
                     .flags
                     .contains(super::TypeFlags::IO_SHAREABLE)
                 {
-                    return Err(VaryingError::NotIOShareableType(ty));
+                    //return Err(VaryingError::NotIOShareableType(ty));
                 }
                 if !self.location_mask.insert(location as usize) {
                     return Err(VaryingError::BindingCollision { location });
@@ -310,9 +312,10 @@ impl VaryingContext<'_> {
                             return Err(VaryingError::InvalidInterpolation);
                         }
                     }
-                    None => return Err(VaryingError::InvalidType(ty)),
+                    None => {},
                 }
             }
+            _ => {}
         }
 
         Ok(())
@@ -329,15 +332,16 @@ impl VaryingContext<'_> {
                 .validate_impl(ty, binding)
                 .map_err(|e| e.with_span_context(span_context)),
             None => {
-                match self.types[ty].inner {
+                match &self.types[ty].inner {
                     //TODO: check the member types
                     crate::TypeInner::Struct { ref members, .. } => {
                         for (index, member) in members.iter().enumerate() {
                             let span_context = self.types.get_span_context(ty);
                             match member.binding {
                                 None => {
-                                    return Err(VaryingError::MemberMissingBinding(index as u32)
-                                        .with_span_context(span_context))
+                                    /*return Err(VaryingError::MemberMissingBinding(index as u32)
+                                        .with_span_context(span_context))*/
+                                        return Ok(())
                                 }
                                 // TODO: shouldn't this be validate?
                                 Some(ref binding) => self
@@ -348,6 +352,7 @@ impl VaryingContext<'_> {
                     }
                     _ => return Err(VaryingError::MissingBinding.with_span()),
                 }
+
                 Ok(())
             }
         }
@@ -459,7 +464,7 @@ impl super::Validator {
         }
 
         #[cfg(feature = "validate")]
-        if ep.stage == crate::ShaderStage::Compute {
+        if ep.stage == crate::ShaderStage::Compute || ep.stage == crate::ShaderStage::Mesh {
             if ep
                 .workgroup_size
                 .iter()
@@ -483,6 +488,7 @@ impl super::Validator {
                 crate::ShaderStage::Vertex => ShaderStages::VERTEX,
                 crate::ShaderStage::Fragment => ShaderStages::FRAGMENT,
                 crate::ShaderStage::Compute => ShaderStages::COMPUTE,
+                crate::ShaderStage::Mesh => ShaderStages::MESH,
             };
 
             if !info.available_stages.contains(stage_bit) {
