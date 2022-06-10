@@ -312,7 +312,7 @@ impl VaryingContext<'_> {
                             return Err(VaryingError::InvalidInterpolation);
                         }
                     }
-                    None => {},
+                    None => {}
                 }
             }
             _ => {}
@@ -340,8 +340,8 @@ impl VaryingContext<'_> {
                             match member.binding {
                                 None => {
                                     /*return Err(VaryingError::MemberMissingBinding(index as u32)
-                                        .with_span_context(span_context))*/
-                                        return Ok(())
+                                    .with_span_context(span_context))*/
+                                    return Ok(());
                                 }
                                 // TODO: shouldn't this be validate?
                                 Some(ref binding) => self

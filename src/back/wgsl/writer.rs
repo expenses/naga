@@ -152,7 +152,7 @@ impl<W: Write> Writer<W> {
         // Write all entry points
         for (index, ep) in module.entry_points.iter().enumerate() {
             let attributes = match ep.stage {
-                ShaderStage::Vertex | ShaderStage::Fragment | ShaderStage::Mesh => vec![Attribute::Stage(ep.stage)],
+                ShaderStage::Vertex | ShaderStage::Fragment => vec![Attribute::Stage(ep.stage)],
                 ShaderStage::Compute => vec![
                     Attribute::Stage(ShaderStage::Compute),
                     Attribute::WorkGroupSize(ep.workgroup_size),
@@ -209,7 +209,6 @@ impl<W: Write> Writer<W> {
                     ShaderStage::Compute => "ComputeOutput",
                     ShaderStage::Fragment => "FragmentOutput",
                     ShaderStage::Vertex => "VertexOutput",
-                    ShaderStage::Mesh => "MeshOutput",
                 };
 
                 write!(self.out, "{}", name)?;
@@ -347,7 +346,6 @@ impl<W: Write> Writer<W> {
                         ShaderStage::Vertex => "vertex",
                         ShaderStage::Fragment => "fragment",
                         ShaderStage::Compute => "compute",
-                        ShaderStage::Mesh => "mesh",
                     };
                     write!(self.out, "@{} ", stage_str)?;
                 }

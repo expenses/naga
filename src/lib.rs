@@ -813,8 +813,6 @@ pub enum Binding {
         interpolation: Option<Interpolation>,
         sampling: Option<Sampling>,
     },
-
-    MeshInput,
 }
 
 /// Pipeline binding information for global resources.

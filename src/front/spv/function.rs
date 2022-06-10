@@ -515,7 +515,7 @@ impl<I: Iterator<Item = u32>> super::Parser<I> {
                 workgroup_size: ep.workgroup_size,
                 function,
                 output_vertices: ep.output_vertices,
-                output_primitives: ep.output_primitives
+                output_primitives: ep.output_primitives,
             });
         }
 

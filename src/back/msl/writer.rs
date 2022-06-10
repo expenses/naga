@@ -766,9 +766,7 @@ impl<W: Write> Writer<W> {
             crate::TypeInner::Vector { size, .. } => {
                 put_numeric_type(&mut self.out, crate::ScalarKind::Uint, &[size])?
             }
-            _ => {
-                return Err(Error::Validation("put_cast_to_uint_scalar_or_vector"))
-            },
+            _ => return Err(Error::Validation("put_cast_to_uint_scalar_or_vector")),
         };
 
         write!(self.out, "(")?;
@@ -1139,9 +1137,7 @@ impl<W: Write> Writer<W> {
         let (offset, array_ty) = match context.module.types[global.ty].inner {
             crate::TypeInner::Struct { ref members, .. } => match members.last() {
                 Some(&crate::StructMember { offset, ty, .. }) => (offset, ty),
-                None => {
-                    return Err(Error::Validation("put_dynamic_array_max_index 0"))
-                },
+                None => return Err(Error::Validation("put_dynamic_array_max_index 0")),
             },
             crate::TypeInner::Array {
                 size: crate::ArraySize::Dynamic,
@@ -1759,7 +1755,7 @@ impl<W: Write> Writer<W> {
                 } => {
                     let is_bool_cast =
                         kind == crate::ScalarKind::Bool || src_kind == crate::ScalarKind::Bool;
-                        dbg!(&convert, src_width);
+                    dbg!(&convert, src_width);
                     let op = match convert {
                         Some(w) if w == src_width || is_bool_cast => "static_cast",
                         Some(8) if kind == crate::ScalarKind::Float => {
@@ -2870,7 +2866,7 @@ impl<W: Write> Writer<W> {
         };
 
         self.write_scalar_constants(module)?;
-        self.write_type_defs(module)?;
+        self.write_type_defs(module, options)?;
         self.write_composite_constants(module)?;
         self.write_functions(module, info, options, pipeline_options)
     }
@@ -2897,7 +2893,7 @@ impl<W: Write> Writer<W> {
         Ok(())
     }
 
-    fn write_type_defs(&mut self, module: &crate::Module) -> BackendResult {
+    fn write_type_defs(&mut self, module: &crate::Module, options: &Options) -> BackendResult {
         for (handle, ty) in module.types.iter() {
             if !ty.needs_alias() {
                 continue;
@@ -2986,6 +2982,28 @@ impl<W: Write> Writer<W> {
                                 )?;
                             }
                             None => {
+                                let resolved_binding = match &member.binding {
+                                    Some(binding) => Some(
+                                        options
+                                            .resolve_local_binding(
+                                                binding,
+                                                super::LocationMode::MeshOutput,
+                                            )
+                                            .unwrap(),
+                                    ),
+                                    None => None,
+                                };
+
+                                let location = match &resolved_binding {
+                                    Some(binding) => {
+                                        let mut s = String::new();
+                                        binding.try_fmt(&mut s);
+                                        s
+                                    }
+                                    None => "".into(),
+                                };
+
+                                dbg!(&resolved_binding);
                                 let base_name = TypeContext {
                                     handle: member.ty,
                                     module,
@@ -2996,10 +3014,11 @@ impl<W: Write> Writer<W> {
                                 };
                                 writeln!(
                                     self.out,
-                                    "{}{} {};",
+                                    "{}{} {}{};",
                                     back::INDENT,
                                     base_name,
-                                    member_name
+                                    member_name,
+                                    location,
                                 )?;
 
                                 // for 3-component vectors, add one component
@@ -3415,9 +3434,9 @@ impl<W: Write> Writer<W> {
                 ),
                 crate::ShaderStage::Compute { .. } => {
                     ("kernel", LocationMode::Uniform, LocationMode::Uniform)
-                },
-                crate::ShaderStage::Mesh {  .. } => {
-                    ("[[mesh]]", LocationMode::Uniform, LocationMode::VertexOutput)
+                }
+                crate::ShaderStage::Mesh { .. } => {
+                    ("[[mesh]]", LocationMode::Uniform, LocationMode::MeshOutput)
                 }
             };
 
@@ -3481,7 +3500,7 @@ impl<W: Write> Writer<W> {
             let stage_out_name = format!("{}Output", fun_name);
             let result_member_name = self.namer.call("member");
             let result_type_name = match fun.result {
-                Some(ref result) => {
+                Some(ref result) if ep.stage != crate::ShaderStage::Mesh => {
                     let mut result_members = Vec::new();
                     if let crate::TypeInner::Struct { ref members, .. } =
                         module.types[result.ty].inner
@@ -3512,11 +3531,12 @@ impl<W: Write> Writer<W> {
                             binding: None,
                             first_time: true,
                         };
+                        let binding = binding.ok_or(Error::Validation("binding"))?;
 
-                        match binding {
+                        match *binding {
                             // Point size is only supported in VS of pipelines with
                             // point primitive topology.
-                            Some(crate::Binding::BuiltIn(crate::BuiltIn::PointSize)) => {
+                            crate::Binding::BuiltIn(crate::BuiltIn::PointSize) => {
                                 has_point_size = true;
                                 if !pipeline_options.allow_point_size {
                                     continue;
@@ -3526,32 +3546,26 @@ impl<W: Write> Writer<W> {
                             // But we can't return UnsupportedBuiltIn error to user.
                             // Because otherwise we can't generate msl shader from any glslang SPIR-V shaders.
                             // glslang generates gl_PerVertex struct with gl_CullDistance builtin inside by default.
-                            Some(crate::Binding::BuiltIn(crate::BuiltIn::CullDistance)) => {
+                            crate::Binding::BuiltIn(crate::BuiltIn::CullDistance) => {
                                 log::warn!("Ignoring CullDistance BuiltIn");
                                 continue;
                             }
                             _ => {}
                         }
 
-                        let mut array_len = match module.types[ty].inner {
+                        let array_len = match module.types[ty].inner {
                             crate::TypeInner::Array {
                                 size: crate::ArraySize::Constant(handle),
                                 ..
-                            } => dbg!(&module.constants[handle]).to_array_length(),
+                            } => module.constants[handle].to_array_length(),
                             _ => None,
                         };
-                        if ep.stage == crate::ShaderStage::Mesh {
-                            array_len = None;
+                        let resolved = options.resolve_local_binding(binding, out_mode)?;
+                        write!(self.out, "{}{} {}", back::INDENT, ty_name, name)?;
+                        if let Some(array_len) = array_len {
+                            write!(self.out, " [{}]", array_len)?;
                         }
-                        dbg!(array_len);
-                        if let Some(binding) = binding {
-                            let resolved = options.resolve_local_binding(binding, out_mode)?;
-                            write!(self.out, "{}{} {}", back::INDENT, ty_name, name)?;
-                            if let Some(array_len) = array_len {
-                                write!(self.out, " [{}]", array_len)?;
-                            }
-                            resolved.try_fmt(&mut self.out)?;
-                        }
+                        resolved.try_fmt(&mut self.out)?;
                         writeln!(self.out, ";")?;
                     }
 
@@ -3569,7 +3583,7 @@ impl<W: Write> Writer<W> {
                     writeln!(self.out, "}};")?;
                     &stage_out_name
                 }
-                None => "void",
+                _ => "void",
             };
 
             // Write the entry point function's name, and begin its argument list.
@@ -3585,6 +3599,32 @@ impl<W: Write> Writer<W> {
                     stage_in_name, varyings_member_name
                 )?;
                 is_first_argument = false;
+            }
+
+            let mesh_out_name = "gl_MeshPerVertexNV";
+            let mesh_name = format!("{}_mesh", mesh_out_name);
+
+            let mesh_shader_info = if ep.stage == crate::ShaderStage::Mesh {
+                let output_vertices = ep.output_vertices.unwrap();
+                let output_primitives = ep.output_primitives.unwrap();
+                Some((output_vertices, output_primitives))
+            } else {
+                None
+            };
+
+            if let Some((output_vertices, output_primitives)) = mesh_shader_info {
+                let separator = if is_first_argument {
+                    is_first_argument = false;
+                    ' '
+                } else {
+                    ','
+                };
+
+                writeln!(
+                    self.out,
+                    "{} metal::mesh<{}, void, {}, {}, metal::topology::triangle> {}",
+                    separator, mesh_out_name, output_vertices, output_primitives, mesh_name
+                )?;
             }
 
             // Then pass the remaining arguments not included in the varyings
@@ -3870,7 +3910,54 @@ impl<W: Write> Writer<W> {
             };
             self.named_expressions.clear();
             self.update_expressions_to_bake(fun, fun_info, &context.expression);
-            self.put_block(back::Level(1), &fun.body, &context)?;
+            let mut body = fun.body.clone();
+
+            if let Some((output_vertices, output_primitives)) = mesh_shader_info {
+                // Remove return statement
+                body.cull(fun.body.len() - 1..);
+                self.put_block(back::Level(1), &body, &context)?;
+
+                writeln!(
+                    self.out,
+                    "{}{}.set_primitive_count(gl_PrimitiveCountNV);",
+                    back::INDENT,
+                    mesh_name
+                )?;
+
+                writeln!(
+                    self.out,
+                    "{}for (uint i = 0; i < {}; i++) {{",
+                    back::INDENT,
+                    output_vertices
+                )?;
+                writeln!(
+                    self.out,
+                    "{}{}{}.set_vertex(i, gl_MeshVerticesNV.inner[i]);",
+                    back::INDENT,
+                    back::INDENT,
+                    mesh_name
+                )?;
+                writeln!(self.out, "{}}}", back::INDENT)?;
+
+                writeln!(
+                    self.out,
+                    "{}for (uint i = 0; i < gl_PrimitiveCountNV * 3; i++) {{",
+                    back::INDENT
+                )?;
+                writeln!(
+                    self.out,
+                    "{}{}{}.set_index(i, gl_PrimitiveIndicesNV.inner[i]);",
+                    back::INDENT,
+                    back::INDENT,
+                    mesh_name
+                )?;
+                writeln!(self.out, "{}}}", back::INDENT)?;
+
+                writeln!(self.out, "{}return;", back::INDENT)?;
+            } else {
+                self.put_block(back::Level(1), &body, &context)?;
+            }
+
             writeln!(self.out, "}}")?;
             if ep_index + 1 != module.entry_points.len() {
                 writeln!(self.out)?;

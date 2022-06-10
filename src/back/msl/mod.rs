@@ -103,6 +103,7 @@ impl ops::Index<crate::ShaderStage> for PerStageMap {
     }
 }
 
+#[derive(Debug)]
 enum ResolvedBinding {
     BuiltIn(crate::BuiltIn),
     Attribute(u32),
@@ -113,10 +114,9 @@ enum ResolvedBinding {
         interpolation: Option<ResolvedInterpolation>,
     },
     Resource(BindTarget),
-    Whatever,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 enum ResolvedInterpolation {
     CenterPerspective,
     CenterNoPerspective,
@@ -191,6 +191,8 @@ enum LocationMode {
 
     /// Compute shader input or output.
     Uniform,
+
+    MeshOutput,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -243,7 +245,6 @@ impl Options {
         mode: LocationMode,
     ) -> Result<ResolvedBinding, Error> {
         match *binding {
-            crate::Binding::MeshInput => Ok(ResolvedBinding::Whatever),
             crate::Binding::BuiltIn(mut built_in) => {
                 if let crate::BuiltIn::Position { ref mut invariant } = built_in {
                     if *invariant && self.lang_version < (2, 1) {
@@ -278,14 +279,25 @@ impl Options {
                             // unwrap: The verifier ensures that vertex shader outputs and fragment
                             // shader inputs always have fully specified interpolation, and that
                             // sampling is `None` only for Flat interpolation.
-                            match interpolation {
-                                Some(interpolation) => {
-                                    let sampling = sampling.unwrap_or(crate::Sampling::Center);
-                                    Some(ResolvedInterpolation::from_binding(interpolation, sampling))
-                                },
-                                None => None
-                            }
-                            
+                            let interpolation = interpolation.unwrap();
+                            let sampling = sampling.unwrap_or(crate::Sampling::Center);
+                            Some(ResolvedInterpolation::from_binding(interpolation, sampling))
+                        },
+                    })
+                }
+                LocationMode::MeshOutput => {
+                    Ok(ResolvedBinding::User {
+                        prefix: if self.spirv_cross_compatibility {
+                            "locn"
+                        } else {
+                            "loc"
+                        },
+                        index: location,
+                        interpolation: {
+                            // unwrap: The verifier ensures that vertex shader outputs and fragment
+                            // shader inputs always have fully specified interpolation, and that
+                            // sampling is `None` only for Flat interpolation.
+                            None
                         },
                     })
                 }
@@ -441,8 +453,7 @@ impl ResolvedBinding {
                 } else {
                     return Err(Error::UnimplementedBindTarget(target.clone()));
                 }
-            },
-            Self::Whatever => {}
+            }
         }
         write!(out, "]]")?;
         Ok(())

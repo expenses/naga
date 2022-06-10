@@ -317,8 +317,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }*/
         ext => {
             //panic!("{}", ext);
-            return Err(CliError("Unknown input file extension").into())
-        },
+            return Err(CliError("Unknown input file extension").into());
+        }
     };
 
     // Decide which capabilities our output formats can support.
