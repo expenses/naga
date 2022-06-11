@@ -1,7 +1,7 @@
 #version 450
 #extension GL_NV_mesh_shader : require
 layout(local_size_x=1) in;
-layout(max_vertices=4, max_primitives=2) out;
+layout(max_vertices=6, max_primitives=3) out;
 layout(triangles) out;
 
 out gl_MeshPerVertexNV {
@@ -9,19 +9,21 @@ out gl_MeshPerVertexNV {
 } gl_MeshVerticesNV[];
 
 out uint gl_PrimitiveIndicesNV[];
-layout(location = 0) out float vertexColor[];
+layout(location = 0) out vec3 vertexColor[];
 
 void main()
 {
-    gl_MeshVerticesNV[0].gl_Position = vec4(-1.0, -1.0, 0.0, 1.0); // Upper Left
-    gl_MeshVerticesNV[1].gl_Position = vec4( 1.0, -1.0, 0.0, 1.0); // Upper Right
-    gl_MeshVerticesNV[2].gl_Position = vec4(-1.0,  1.0, 0.0, 1.0); // Bottom Left
-    gl_MeshVerticesNV[3].gl_Position = vec4( 1.0,  1.0, 0.0, 1.0); // Bottom Right
-    
-    vertexColor[0] = 0.0;
-    vertexColor[1] = 0.25;
-    vertexColor[2] = 0.5;
-    vertexColor[3] = 0.75;
+    gl_MeshVerticesNV[0].gl_Position = vec4(-0.9, -0.9, 0.0, 1.0); // Bottom Left
+    gl_MeshVerticesNV[1].gl_Position = vec4( 0.9, -0.9, 0.0, 1.0); // Bottom Right
+    gl_MeshVerticesNV[2].gl_Position = vec4(-0.9,  0.8, 0.0, 1.0); // Upper Left
+    gl_MeshVerticesNV[3].gl_Position = vec4( 0.7,  0.8, 0.0, 1.0); // Upper Right
+
+    gl_MeshVerticesNV[4].gl_Position = vec4(1.0,  1.0, 0.0, 1.0); // Upper upper Right
+
+    vertexColor[0] = vec3(1.0, 0.0, 0.0);
+    vertexColor[1] = vec3(0.0, 1.0, 0.0);
+    vertexColor[2] = vec3(0.0, 0.0, 1.0);
+    vertexColor[3] = vec3(1.0, 1.0, 0.0);
     
     gl_PrimitiveIndicesNV[0] = 0;
     gl_PrimitiveIndicesNV[1] = 1;
@@ -29,5 +31,10 @@ void main()
     gl_PrimitiveIndicesNV[3] = 2;
     gl_PrimitiveIndicesNV[4] = 1;
     gl_PrimitiveIndicesNV[5] = 3;
-    gl_PrimitiveCountNV = 2;
+
+    gl_PrimitiveIndicesNV[6] = 3;
+    gl_PrimitiveIndicesNV[7] = 4;
+    gl_PrimitiveIndicesNV[8] = 2;
+
+    gl_PrimitiveCountNV = 3;
 }

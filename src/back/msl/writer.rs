@@ -3500,12 +3500,40 @@ impl<W: Write> Writer<W> {
             let stage_out_name = format!("{}Output", fun_name);
             let result_member_name = self.namer.call("member");
             let result_type_name = match fun.result {
-                Some(ref result) if ep.stage != crate::ShaderStage::Mesh => {
+                Some(ref result) => {
                     let mut result_members = Vec::new();
                     if let crate::TypeInner::Struct { ref members, .. } =
                         module.types[result.ty].inner
                     {
                         for (member_index, member) in members.iter().enumerate() {
+                            match module.types[member.ty].inner {
+                                crate::TypeInner::Array {
+                                    base,..
+                                } => {
+                                    let ty = &module.types[base];
+
+                                    dbg!(&ty);
+
+                                    if ty.name.as_ref() == Some(&String::from("gl_MeshPerVertexNV")) {
+                                        if let crate::TypeInner::Struct {members, ..} = &ty.inner {
+                                        
+                                            for member in members {
+                                                result_members.push((
+                                                    &self.names[&NameKey::StructMember(result.ty, member_index as u32)],
+                                                    member.ty,
+                                                    member.binding.as_ref(),
+                                                ));
+                                            }
+                                        }
+                                        
+                                        continue;
+                                    }
+
+                                    
+                                },
+                                _ => {}
+                            }
+
                             result_members.push((
                                 &self.names[&NameKey::StructMember(result.ty, member_index as u32)],
                                 member.ty,
@@ -3531,12 +3559,19 @@ impl<W: Write> Writer<W> {
                             binding: None,
                             first_time: true,
                         };
-                        let binding = binding.ok_or(Error::Validation("binding"))?;
 
-                        match *binding {
+                        let _binding = match binding {
+                            Some(binding) => {},
+                            None => {
+                                dbg!(&name, &module.types[ty]);
+                                //continue;
+                            }
+                        };
+
+                        match binding {
                             // Point size is only supported in VS of pipelines with
                             // point primitive topology.
-                            crate::Binding::BuiltIn(crate::BuiltIn::PointSize) => {
+                            Some(crate::Binding::BuiltIn(crate::BuiltIn::PointSize)) => {
                                 has_point_size = true;
                                 if !pipeline_options.allow_point_size {
                                     continue;
@@ -3546,26 +3581,58 @@ impl<W: Write> Writer<W> {
                             // But we can't return UnsupportedBuiltIn error to user.
                             // Because otherwise we can't generate msl shader from any glslang SPIR-V shaders.
                             // glslang generates gl_PerVertex struct with gl_CullDistance builtin inside by default.
-                            crate::Binding::BuiltIn(crate::BuiltIn::CullDistance) => {
+                            Some(crate::Binding::BuiltIn(crate::BuiltIn::CullDistance)) => {
                                 log::warn!("Ignoring CullDistance BuiltIn");
                                 continue;
                             }
                             _ => {}
                         }
 
+                        /*match module.types[ty].inner {
+                            crate::TypeInner::Array {
+                                base,..
+                            } => {
+                                dbg!(&module.types[base]);
+                            },
+                            _ => {}
+                        }*/
+
                         let array_len = match module.types[ty].inner {
                             crate::TypeInner::Array {
                                 size: crate::ArraySize::Constant(handle),
                                 ..
-                            } => module.constants[handle].to_array_length(),
+                            } if ep.stage != crate::ShaderStage::Mesh => module.constants[handle].to_array_length(),
                             _ => None,
                         };
-                        let resolved = options.resolve_local_binding(binding, out_mode)?;
+
+                        match module.types[ty].inner {
+                            crate::TypeInner::Array {
+                                base,
+                                ..
+                            } => {
+                                if let crate::TypeInner::Scalar { kind: crate::ScalarKind::Uint , ..} = &module.types[base].inner {
+                                    continue;
+                                }
+                            },
+                            crate::TypeInner::Scalar { kind: crate::ScalarKind::Uint , ..} => {
+                                continue;
+                            }
+                            _ => {},
+                        };
+
+                        if let crate::TypeInner::Scalar { kind: crate::ScalarKind::Uint , ..} = &module.types[ty].inner {
+                            continue;
+                        }
+
                         write!(self.out, "{}{} {}", back::INDENT, ty_name, name)?;
                         if let Some(array_len) = array_len {
                             write!(self.out, " [{}]", array_len)?;
                         }
-                        resolved.try_fmt(&mut self.out)?;
+
+                        if let Some(binding) = binding {
+                            let resolved = options.resolve_local_binding(binding, out_mode)?;
+                            resolved.try_fmt(&mut self.out)?;
+                        } 
                         writeln!(self.out, ";")?;
                     }
 
@@ -3581,7 +3648,12 @@ impl<W: Write> Writer<W> {
                         )?;
                     }
                     writeln!(self.out, "}};")?;
-                    &stage_out_name
+
+                    if ep.stage != crate::ShaderStage::Mesh {
+                        &stage_out_name
+                    } else {
+                        "void"
+                    }
                 }
                 _ => "void",
             };
@@ -3601,7 +3673,7 @@ impl<W: Write> Writer<W> {
                 is_first_argument = false;
             }
 
-            let mesh_out_name = "gl_MeshPerVertexNV";
+            let mesh_out_name = stage_out_name.clone();
             let mesh_name = format!("{}_mesh", mesh_out_name);
 
             let mesh_shader_info = if ep.stage == crate::ShaderStage::Mesh {
@@ -3932,7 +4004,28 @@ impl<W: Write> Writer<W> {
                 )?;
                 writeln!(
                     self.out,
-                    "{}{}{}.set_vertex(i, gl_MeshVerticesNV.inner[i]);",
+                    "{}{}{} _output;",
+                    back::INDENT,
+                    back::INDENT,
+                    mesh_out_name
+                )?;
+                {
+                    writeln!(
+                        self.out,
+                        "{}{}_output.member = gl_MeshVerticesNV.inner[i].gl_Position;",
+                        back::INDENT,
+                        back::INDENT,
+                    )?; 
+                    writeln!(
+                        self.out,
+                        "{}{}_output.member_1 = vertexColor.inner[i];",
+                        back::INDENT,
+                        back::INDENT,
+                    )?; 
+                }
+                writeln!(
+                    self.out,
+                    "{}{}{}.set_vertex(i, _output);",
                     back::INDENT,
                     back::INDENT,
                     mesh_name
