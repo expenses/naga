@@ -291,7 +291,6 @@ fn write_output_glsl(
     let pipeline_options = glsl::PipelineOptions {
         shader_stage: stage,
         entry_point: ep_name.to_string(),
-        multiview: None,
     };
 
     let mut buffer = String::new();
@@ -434,6 +433,10 @@ fn convert_wgsl() {
         ),
         (
             "bits",
+            Targets::SPIRV | Targets::METAL | Targets::GLSL | Targets::WGSL,
+        ),
+        (
+            "bitcast",
             Targets::SPIRV | Targets::METAL | Targets::GLSL | Targets::WGSL,
         ),
         (
@@ -591,6 +594,8 @@ fn convert_spv_all() {
         Targets::HLSL | Targets::WGSL | Targets::METAL,
     );
     convert_spv("degrees", false, Targets::empty());
+    convert_spv("multiview", true, Targets::GLSL | Targets::WGSL);
+    convert_spv("multiview_webgl", true, Targets::GLSL);
 }
 
 #[cfg(feature = "glsl-in")]

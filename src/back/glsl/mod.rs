@@ -119,23 +119,15 @@ pub enum Version {
     /// `core` GLSL.
     Desktop(u16),
     /// `es` GLSL.
-    Embedded { version: u16, is_webgl: bool },
+    Embedded(u16),
 }
 
 impl Version {
-    /// Create a new embedded version.
-    pub fn embedded(version: u16) -> Self {
-        Self::Embedded {
-            version,
-            is_webgl: false,
-        }
-    }
-
     /// Returns true if self is `Version::Embedded` (i.e. is a es version)
     const fn is_es(&self) -> bool {
         match *self {
             Version::Desktop(_) => false,
-            Version::Embedded { .. } => true,
+            Version::Embedded(_) => true,
         }
     }
 
@@ -148,7 +140,7 @@ impl Version {
     fn is_supported(&self) -> bool {
         match *self {
             Version::Desktop(v) => SUPPORTED_CORE_VERSIONS.contains(&v),
-            Version::Embedded { version: v, .. } => SUPPORTED_ES_VERSIONS.contains(&v),
+            Version::Embedded(v) => SUPPORTED_ES_VERSIONS.contains(&v),
         }
     }
 
@@ -159,19 +151,19 @@ impl Version {
     /// Note: `location=` for vertex inputs and fragment outputs is supported
     /// unconditionally for GLES 300.
     fn supports_explicit_locations(&self) -> bool {
-        *self >= Version::embedded(310) || *self >= Version::Desktop(410)
+        *self >= Version::Embedded(310) || *self >= Version::Desktop(410)
     }
 
     fn supports_early_depth_test(&self) -> bool {
-        *self >= Version::Desktop(130) || *self >= Version::embedded(310)
+        *self >= Version::Desktop(130) || *self >= Version::Embedded(310)
     }
 
     fn supports_std430_layout(&self) -> bool {
-        *self >= Version::Desktop(430) || *self >= Version::embedded(310)
+        *self >= Version::Desktop(430) || *self >= Version::Embedded(310)
     }
 
     fn supports_fma_function(&self) -> bool {
-        *self >= Version::Desktop(400) || *self >= Version::embedded(310)
+        *self >= Version::Desktop(400) || *self >= Version::Embedded(310)
     }
 }
 
@@ -179,9 +171,7 @@ impl PartialOrd for Version {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match (*self, *other) {
             (Version::Desktop(x), Version::Desktop(y)) => Some(x.cmp(&y)),
-            (Version::Embedded { version: x, .. }, Version::Embedded { version: y, .. }) => {
-                Some(x.cmp(&y))
-            }
+            (Version::Embedded(x), Version::Embedded(y)) => Some(x.cmp(&y)),
             _ => None,
         }
     }
@@ -191,7 +181,7 @@ impl fmt::Display for Version {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Version::Desktop(v) => write!(f, "{} core", v),
-            Version::Embedded { version: v, .. } => write!(f, "{} es", v),
+            Version::Embedded(v) => write!(f, "{} es", v),
         }
     }
 }
@@ -220,16 +210,39 @@ pub struct Options {
     pub writer_flags: WriterFlags,
     /// Map of resources association to binding locations.
     pub binding_map: BindingMap,
+    /// A set of options to use when rendering multiple views.
+    pub multiview: Option<MultiviewOptions>,
 }
 
 impl Default for Options {
     fn default() -> Self {
         Options {
-            version: Version::embedded(310),
+            version: Version::Embedded(310),
             writer_flags: WriterFlags::ADJUST_COORDINATE_SPACE,
             binding_map: BindingMap::default(),
+            multiview: None,
         }
     }
+}
+
+/// Which multiview extension to use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize))]
+#[cfg_attr(feature = "deserialize", derive(serde::Deserialize))]
+pub enum MultiviewExtension {
+    // Corresponds to the OpenGL `GL_EXT_multiview` extension.
+    GLExtMultiview,
+    // Corresponds to WebGL `OVR_multiview2` extension.
+    OvrMultiview2,
+}
+
+/// A set of options to use when rendering multiple views.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize))]
+#[cfg_attr(feature = "deserialize", derive(serde::Deserialize))]
+pub struct MultiviewOptions {
+    pub num_views: std::num::NonZeroU32,
+    pub extension: MultiviewExtension,
 }
 
 /// A subset of options meant to be changed per pipeline.
@@ -243,8 +256,6 @@ pub struct PipelineOptions {
     ///
     /// If no entry point that matches is found while creating a [`Writer`], a error will be thrown.
     pub entry_point: String,
-    /// How many views to render to.
-    pub multiview: Option<std::num::NonZeroU32>,
 }
 
 /// Reflection info for texture mappings and uniforms.
@@ -297,6 +308,7 @@ struct VaryingName<'a> {
     binding: &'a crate::Binding,
     stage: ShaderStage,
     output: bool,
+    multiview_extension: Option<MultiviewExtension>,
 }
 impl fmt::Display for VaryingName<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -314,7 +326,11 @@ impl fmt::Display for VaryingName<'_> {
                 write!(f, "_{}_location{}", prefix, location,)
             }
             crate::Binding::BuiltIn(built_in) => {
-                write!(f, "{}", glsl_built_in(built_in, self.output))
+                write!(
+                    f,
+                    "{}",
+                    glsl_built_in(built_in, self.output, self.multiview_extension)
+                )
             }
         }
     }
@@ -412,8 +428,7 @@ pub struct Writer<'a, W> {
     named_expressions: crate::NamedExpressions,
     /// Set of expressions that need to be baked to avoid unnecessary repetition in output
     need_bake_expressions: back::NeedBakeExpressions,
-    /// How many views to render to, if a vertex shader.
-    multiview: Option<std::num::NonZeroU32>,
+    shader_stage: ShaderStage,
 }
 
 impl<'a, W: Write> Writer<'a, W> {
@@ -465,11 +480,7 @@ impl<'a, W: Write> Writer<'a, W> {
             reflection_names_globals: crate::FastHashMap::default(),
             entry_point: &module.entry_points[ep_idx],
             entry_point_idx: ep_idx as u16,
-            multiview: if pipeline_options.shader_stage == ShaderStage::Vertex {
-                pipeline_options.multiview
-            } else {
-                None
-            },
+            shader_stage: pipeline_options.shader_stage,
             block_id: IdGenerator::default(),
             named_expressions: Default::default(),
             need_bake_expressions: Default::default(),
@@ -502,7 +513,11 @@ impl<'a, W: Write> Writer<'a, W> {
         // writing the module saving some loops but some older versions (420 or less) required the
         // extensions to appear before being used, even though extensions are part of the
         // preprocessor not the processor ¯\_(ツ)_/¯
-        self.features.write(self.options.version, &mut self.out)?;
+        self.features.write(
+            self.options.version,
+            self.multiview_extension(),
+            &mut self.out,
+        )?;
 
         // Write the additional extensions
         if self
@@ -558,9 +573,11 @@ impl<'a, W: Write> Writer<'a, W> {
             }
         }
 
-        if let Some(multiview) = self.multiview {
-            writeln!(self.out, "layout(num_views = {}) in;", multiview)?;
-            writeln!(self.out)?;
+        if self.shader_stage == ShaderStage::Vertex {
+            if let Some(multiview) = self.options.multiview.as_ref() {
+                writeln!(self.out, "layout(num_views = {}) in;", multiview.num_views)?;
+                writeln!(self.out)?;
+            }
         }
 
         let ep_info = self.info.get_entry_point(self.entry_point_idx as usize);
@@ -1203,7 +1220,11 @@ impl<'a, W: Write> Writer<'a, W> {
             } => (location, interpolation, sampling),
             crate::Binding::BuiltIn(built_in) => {
                 if let crate::BuiltIn::Position { invariant: true } = built_in {
-                    writeln!(self.out, "invariant {};", glsl_built_in(built_in, output))?;
+                    writeln!(
+                        self.out,
+                        "invariant {};",
+                        glsl_built_in(built_in, output, self.multiview_extension())
+                    )?;
                 }
                 return Ok(());
             }
@@ -1261,6 +1282,7 @@ impl<'a, W: Write> Writer<'a, W> {
             },
             stage: self.entry_point.stage,
             output,
+            multiview_extension: self.multiview_extension(),
         };
         writeln!(self.out, " {};", vname)?;
 
@@ -1401,6 +1423,7 @@ impl<'a, W: Write> Writer<'a, W> {
                                 binding: member.binding.as_ref().unwrap(),
                                 stage,
                                 output: false,
+                                multiview_extension: self.multiview_extension(),
                             };
                             if index != 0 {
                                 write!(self.out, ", ")?;
@@ -1414,6 +1437,7 @@ impl<'a, W: Write> Writer<'a, W> {
                             binding: arg.binding.as_ref().unwrap(),
                             stage,
                             output: false,
+                            multiview_extension: self.multiview_extension(),
                         };
                         writeln!(self.out, "{};", varying_name)?;
                     }
@@ -1549,20 +1573,30 @@ impl<'a, W: Write> Writer<'a, W> {
         arg: Handle<crate::Expression>,
         arg1: Handle<crate::Expression>,
         size: usize,
+        ctx: &back::FunctionCtx<'_>,
     ) -> BackendResult {
+        // Write parantheses around the dot product expression to prevent operators
+        // with different precedences from applying earlier.
         write!(self.out, "(")?;
 
-        let arg0_name = &self.named_expressions[&arg];
-        let arg1_name = &self.named_expressions[&arg1];
-
-        // This will print an extra '+' at the beginning but that is fine in glsl
+        // Cycle trough all the components of the vector
         for index in 0..size {
             let component = back::COMPONENTS[index];
-            write!(
-                self.out,
-                " + {}.{} * {}.{}",
-                arg0_name, component, arg1_name, component
-            )?;
+            // Write the addition to the previous product
+            // This will print an extra '+' at the beginning but that is fine in glsl
+            write!(self.out, " + ")?;
+            // Write the first vector expression, this expression is marked to be
+            // cached so unless it can't be cached (for example, it's a Constant)
+            // it shouldn't produce large expressions.
+            self.write_expr(arg, ctx)?;
+            // Access the current component on the first vector
+            write!(self.out, ".{} * ", component)?;
+            // Write the second vector expression, this expression is marked to be
+            // cached so unless it can't be cached (for example, it's a Constant)
+            // it shouldn't produce large expressions.
+            self.write_expr(arg1, ctx)?;
+            // Access the current component on the second vector
+            write!(self.out, ".{}", component)?;
         }
 
         write!(self.out, ")")?;
@@ -1900,6 +1934,7 @@ impl<'a, W: Write> Writer<'a, W> {
                                             binding: member.binding.as_ref().unwrap(),
                                             stage: ep.stage,
                                             output: true,
+                                            multiview_extension: self.multiview_extension(),
                                         };
                                         write!(self.out, "{} = ", varying_name)?;
 
@@ -1924,6 +1959,7 @@ impl<'a, W: Write> Writer<'a, W> {
                                         binding: result.binding.as_ref().unwrap(),
                                         stage: ep.stage,
                                         output: true,
+                                        multiview_extension: self.multiview_extension(),
                                     };
                                     write!(self.out, "{} = ", name)?;
                                     self.write_expr(value, ctx)?;
@@ -2749,7 +2785,7 @@ impl<'a, W: Write> Writer<'a, W> {
                             ..
                         } => "dot",
                         crate::TypeInner::Vector { size, .. } => {
-                            return self.write_dot_product(arg, arg1.unwrap(), size as usize)
+                            return self.write_dot_product(arg, arg1.unwrap(), size as usize, ctx)
                         }
                         _ => unreachable!(
                             "Correct TypeInner for dot product should be already validated"
@@ -2821,32 +2857,59 @@ impl<'a, W: Write> Writer<'a, W> {
                 let extract_bits = fun == Mf::ExtractBits;
                 let insert_bits = fun == Mf::InsertBits;
 
-                // we might need to cast to unsigned integers since
-                // GLSL's findLSB / findMSB always return signed integers
-                let need_extra_paren = {
-                    (fun == Mf::FindLsb || fun == Mf::FindMsb || fun == Mf::CountOneBits)
-                        && match *ctx.info[arg].ty.inner_with(&self.module.types) {
-                            crate::TypeInner::Scalar {
-                                kind: crate::ScalarKind::Uint,
-                                ..
-                            } => {
-                                write!(self.out, "uint(")?;
-                                true
-                            }
-                            crate::TypeInner::Vector {
-                                kind: crate::ScalarKind::Uint,
-                                size,
-                                ..
-                            } => {
-                                write!(self.out, "uvec{}(", size as u8)?;
-                                true
-                            }
-                            _ => false,
-                        }
+                // Some GLSL functions always return signed integers (like findMSB),
+                // so they need to be cast to uint if the argument is also an uint.
+                let ret_might_need_int_to_uint =
+                    matches!(fun, Mf::FindLsb | Mf::FindMsb | Mf::CountOneBits | Mf::Abs);
+
+                // Some GLSL functions only accept signed integers (like abs),
+                // so they need their argument cast from uint to int.
+                let arg_might_need_uint_to_int = matches!(fun, Mf::Abs);
+
+                // Check if the argument is an unsigned integer and return the vector size
+                // in case it's a vector
+                let maybe_uint_size = match *ctx.info[arg].ty.inner_with(&self.module.types) {
+                    crate::TypeInner::Scalar {
+                        kind: crate::ScalarKind::Uint,
+                        ..
+                    } => Some(None),
+                    crate::TypeInner::Vector {
+                        kind: crate::ScalarKind::Uint,
+                        size,
+                        ..
+                    } => Some(Some(size)),
+                    _ => None,
                 };
 
+                // Cast to uint if the function needs it
+                if ret_might_need_int_to_uint {
+                    if let Some(maybe_size) = maybe_uint_size {
+                        match maybe_size {
+                            Some(size) => write!(self.out, "uvec{}(", size as u8)?,
+                            None => write!(self.out, "uint(")?,
+                        }
+                    }
+                }
+
                 write!(self.out, "{}(", fun_name)?;
+
+                // Cast to int if the function needs it
+                if arg_might_need_uint_to_int {
+                    if let Some(maybe_size) = maybe_uint_size {
+                        match maybe_size {
+                            Some(size) => write!(self.out, "ivec{}(", size as u8)?,
+                            None => write!(self.out, "int(")?,
+                        }
+                    }
+                }
+
                 self.write_expr(arg, ctx)?;
+
+                // Close the cast from uint to int
+                if arg_might_need_uint_to_int && maybe_uint_size.is_some() {
+                    write!(self.out, ")")?
+                }
+
                 if let Some(arg) = arg1 {
                     write!(self.out, ", ")?;
                     if extract_bits {
@@ -2879,7 +2942,8 @@ impl<'a, W: Write> Writer<'a, W> {
                 }
                 write!(self.out, ")")?;
 
-                if need_extra_paren {
+                // Close the cast from int to uint
+                if ret_might_need_int_to_uint && maybe_uint_size.is_some() {
                     write!(self.out, ")")?
                 }
             }
@@ -2915,29 +2979,54 @@ impl<'a, W: Write> Writer<'a, W> {
                     None => {
                         use crate::ScalarKind as Sk;
 
+                        let vector_size = match *inner {
+                            TypeInner::Vector { size, .. } => Some(size),
+                            _ => None,
+                        };
+
                         let source_kind = inner.scalar_kind().unwrap();
-                        let conv_op = match (source_kind, target_kind) {
-                            (Sk::Float, Sk::Sint) => "floatBitsToInt",
-                            (Sk::Float, Sk::Uint) => "floatBitsToUint",
-                            (Sk::Sint, Sk::Float) => "intBitsToFloat",
-                            (Sk::Uint, Sk::Float) => "uintBitsToFloat",
+                        let conv_op = match (source_kind, target_kind, vector_size) {
+                            (Sk::Bool, Sk::Float, Some(size)) => match size {
+                                crate::VectorSize::Bi => "vec2",
+                                crate::VectorSize::Tri => "vec3",
+                                crate::VectorSize::Quad => "vec4",
+                            },
+                            (Sk::Sint | Sk::Bool, Sk::Uint, Some(size)) => match size {
+                                crate::VectorSize::Bi => "uvec2",
+                                crate::VectorSize::Tri => "uvec3",
+                                crate::VectorSize::Quad => "uvec4",
+                            },
+                            (Sk::Uint | Sk::Bool, Sk::Sint, Some(size)) => match size {
+                                crate::VectorSize::Bi => "ivec2",
+                                crate::VectorSize::Tri => "ivec3",
+                                crate::VectorSize::Quad => "ivec4",
+                            },
+                            (Sk::Uint | Sk::Sint | Sk::Float, Sk::Bool, Some(size)) => match size {
+                                crate::VectorSize::Bi => "bvec2",
+                                crate::VectorSize::Tri => "bvec3",
+                                crate::VectorSize::Quad => "bvec4",
+                            },
+                            (Sk::Float, Sk::Sint, _) => "floatBitsToInt",
+                            (Sk::Float, Sk::Uint, _) => "floatBitsToUint",
+                            (Sk::Sint, Sk::Float, _) => "intBitsToFloat",
+                            (Sk::Uint, Sk::Float, _) => "uintBitsToFloat",
                             // There is no way to bitcast between Uint/Sint in glsl. Use constructor conversion
-                            (Sk::Uint, Sk::Sint) => "int",
-                            (Sk::Sint, Sk::Uint) => "uint",
+                            (Sk::Uint, Sk::Sint, None) => "int",
+                            (Sk::Sint, Sk::Uint, None) => "uint",
 
-                            (Sk::Bool, Sk::Sint) => "int",
-                            (Sk::Bool, Sk::Uint) => "uint",
-                            (Sk::Bool, Sk::Float) => "float",
+                            (Sk::Bool, Sk::Sint, None) => "int",
+                            (Sk::Bool, Sk::Uint, None) => "uint",
+                            (Sk::Bool, Sk::Float, None) => "float",
 
-                            (Sk::Sint, Sk::Bool) => "bool",
-                            (Sk::Uint, Sk::Bool) => "bool",
-                            (Sk::Float, Sk::Bool) => "bool",
+                            (Sk::Sint, Sk::Bool, None) => "bool",
+                            (Sk::Uint, Sk::Bool, None) => "bool",
+                            (Sk::Float, Sk::Bool, None) => "bool",
 
                             // No conversion needed
-                            (Sk::Sint, Sk::Sint) => "",
-                            (Sk::Uint, Sk::Uint) => "",
-                            (Sk::Float, Sk::Float) => "",
-                            (Sk::Bool, Sk::Bool) => "",
+                            (Sk::Sint, Sk::Sint, _) => "",
+                            (Sk::Uint, Sk::Uint, _) => "",
+                            (Sk::Float, Sk::Float, _) => "",
+                            (Sk::Bool, Sk::Bool, _) => "",
                         };
                         write!(self.out, "{}", conv_op)?;
                         if !conv_op.is_empty() {
@@ -3542,6 +3631,15 @@ impl<'a, W: Write> Writer<'a, W> {
     }
 }
 
+impl<'a, W> Writer<'a, W> {
+    fn multiview_extension(&self) -> Option<MultiviewExtension> {
+        self.options
+            .multiview
+            .as_ref()
+            .map(|multiview| multiview.extension)
+    }
+}
+
 /// Structure returned by [`glsl_scalar`](glsl_scalar)
 ///
 /// It contains both a prefix used in other types and the full type name
@@ -3592,10 +3690,12 @@ const fn glsl_scalar(
 }
 
 /// Helper function that returns the glsl variable name for a builtin
-const fn glsl_built_in(built_in: crate::BuiltIn, output: bool) -> &'static str {
+fn glsl_built_in(
+    built_in: crate::BuiltIn,
+    output: bool,
+    multiview_extension: Option<MultiviewExtension>,
+) -> &'static str {
     use crate::BuiltIn as Bi;
-
-    let multiview_ovr = true;
 
     match built_in {
         Bi::Position { .. } => {
@@ -3605,7 +3705,9 @@ const fn glsl_built_in(built_in: crate::BuiltIn, output: bool) -> &'static str {
                 "gl_FragCoord"
             }
         }
-        Bi::ViewIndex if multiview_ovr => "int(gl_ViewID_OVR)",
+        Bi::ViewIndex if multiview_extension == Some(MultiviewExtension::OvrMultiview2) => {
+            "int(gl_ViewID_OVR)"
+        }
         Bi::ViewIndex => "gl_ViewIndex",
         // vertex
         Bi::BaseInstance => "uint(gl_BaseInstance)",
