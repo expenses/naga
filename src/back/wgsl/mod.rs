@@ -50,3 +50,7 @@ impl crate::AtomicFunction {
         }
     }
 }
+
+pub fn sanitise_entrypoint(entry_point: &str) -> String {
+    crate::proc::Namer::default().sanitize(entry_point).into()
+}

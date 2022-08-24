@@ -38,7 +38,7 @@ impl Namer {
     /// The return value is a valid identifier prefix in all of Naga's output languages,
     /// and it never ends with a `SEPARATOR` character.
     /// It is used as a key into the unique table.
-    fn sanitize<'s>(&self, string: &'s str) -> Cow<'s, str> {
+    pub fn sanitize<'s>(&self, string: &'s str) -> Cow<'s, str> {
         let string = string
             .trim_start_matches(|c: char| c.is_numeric())
             .trim_end_matches(SEPARATOR);
