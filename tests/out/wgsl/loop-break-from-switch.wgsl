@@ -27,7 +27,7 @@ fn function() {
 }
 
 @fragment 
-fn main(@location(0) param: i32) -> @location(0) i32 {
+fn main(@location(0) @interpolate(flat) param: i32) -> @location(0) i32 {
     global = param;
     function();
     let _e3 = global_1;
