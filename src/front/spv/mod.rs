@@ -72,6 +72,7 @@ pub const SUPPORTED_CAPABILITIES: &[spirv::Capability] = &[
     spirv::Capability::Float64,
     spirv::Capability::Geometry,
     spirv::Capability::MultiView,
+    spirv::Capability::RuntimeDescriptorArray,
     // tricky ones
     spirv::Capability::UniformBufferArrayDynamicIndexing,
     spirv::Capability::StorageBufferArrayDynamicIndexing,
@@ -80,6 +81,7 @@ pub const SUPPORTED_EXTENSIONS: &[&str] = &[
     "SPV_KHR_storage_buffer_storage_class",
     "SPV_KHR_vulkan_memory_model",
     "SPV_KHR_multiview",
+    "SPV_EXT_descriptor_indexing"
 ];
 pub const SUPPORTED_EXT_SETS: &[&str] = &["GLSL.std.450"];
 
